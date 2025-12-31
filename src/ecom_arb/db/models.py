@@ -92,6 +92,70 @@ class Product(Base):
         return f"<Product {self.slug}: {self.name}>"
 
 
+class ScoredProduct(Base):
+    """Scored product from the scoring pipeline."""
+
+    __tablename__ = "scored_products"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    # Product identification
+    source_product_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(500))
+
+    # Source info
+    source: Mapped[str] = mapped_column(String(50), default="cj")
+    source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    # Pricing inputs
+    product_cost: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    shipping_cost: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    selling_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+
+    # Category
+    category: Mapped[str] = mapped_column(String(100))
+
+    # Market data
+    estimated_cpc: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+
+    # Calculated financials
+    cogs: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    gross_margin: Mapped[Decimal] = mapped_column(Numeric(10, 4))
+    net_margin: Mapped[Decimal] = mapped_column(Numeric(10, 4))
+    max_cpc: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    cpc_buffer: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+
+    # Filter result
+    passed_filters: Mapped[bool] = mapped_column(Boolean, default=False)
+    rejection_reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    # Point scoring
+    points: Mapped[int | None] = mapped_column(nullable=True)
+    point_breakdown: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    rank_score: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+
+    # Recommendation
+    recommendation: Mapped[str] = mapped_column(String(50), default="REJECT")
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScoredProduct {self.source_product_id}: {self.recommendation}>"
+
+
 class Order(Base):
     """Order model for tracking purchases."""
 
