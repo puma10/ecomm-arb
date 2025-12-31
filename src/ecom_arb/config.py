@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # API
     api_prefix: str = "/api"
 
+    # Google Ads
+    google_ads_client_id: str = ""
+    google_ads_client_secret: str = ""
+    google_ads_refresh_token: str = ""
+    google_ads_developer_token: str = ""
+    google_ads_customer_id: str = ""  # Format: 123-456-7890
+
 
 @lru_cache
 def get_settings() -> Settings:
