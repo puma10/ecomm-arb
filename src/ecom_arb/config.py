@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     debug: bool = False
     environment: str = "development"
 
-    # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/ecom_arb"
+    # Database (SQLite for local dev, PostgreSQL for prod)
+    database_url: str = "sqlite+aiosqlite:///./ecom_arb.db"
 
     # Stripe
     stripe_secret_key: str = ""

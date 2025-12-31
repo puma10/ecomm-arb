@@ -61,7 +61,13 @@ export async function getProduct(slug: string): Promise<Product> {
     throw new Error("Product not found");
   }
 
-  return res.json();
+  const data = await res.json();
+  // Convert string prices to numbers
+  return {
+    ...data,
+    price: Number(data.price),
+    compare_at_price: data.compare_at_price ? Number(data.compare_at_price) : null,
+  };
 }
 
 export async function createCheckoutSession(
@@ -98,7 +104,13 @@ export async function getOrder(orderId: string): Promise<Order> {
     throw new Error("Order not found");
   }
 
-  return res.json();
+  const data = await res.json();
+  return {
+    ...data,
+    subtotal: Number(data.subtotal),
+    shipping_cost: Number(data.shipping_cost),
+    total: Number(data.total),
+  };
 }
 
 export async function lookupOrder(
