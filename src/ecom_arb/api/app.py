@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from ecom_arb.api.routers import checkout, orders, products
+from ecom_arb.api.routers import checkout, orders, products, scored
 from ecom_arb.config import get_settings
 
 settings = get_settings()
@@ -26,6 +26,8 @@ app.add_middleware(
 )
 
 # Include routers
+# scored router must come before products to avoid /{slug} catching /scored
+app.include_router(scored.router, prefix=settings.api_prefix)
 app.include_router(products.router, prefix=settings.api_prefix)
 app.include_router(checkout.router, prefix=settings.api_prefix)
 app.include_router(orders.router, prefix=settings.api_prefix)
