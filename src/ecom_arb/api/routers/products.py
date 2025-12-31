@@ -49,6 +49,29 @@ class ProductCreate(BaseModel):
     shipping_days_max: int = 14
 
 
+class ProductListResponse(BaseModel):
+    """Response for list of products."""
+
+    items: list[ProductResponse]
+    total: int
+
+
+@router.get("", response_model=ProductListResponse)
+async def list_products(
+    db: AsyncSession = Depends(get_db),
+) -> ProductListResponse:
+    """List all active products for the storefront."""
+    result = await db.execute(
+        select(Product).where(Product.active == True).order_by(Product.created_at.desc())  # noqa: E712
+    )
+    products = result.scalars().all()
+
+    return ProductListResponse(
+        items=[ProductResponse.model_validate(p) for p in products],
+        total=len(products),
+    )
+
+
 @router.get("/{slug}", response_model=ProductResponse)
 async def get_product(
     slug: str,

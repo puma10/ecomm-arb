@@ -52,6 +52,31 @@ export interface Order {
   };
 }
 
+export interface ProductListResponse {
+  items: Product[];
+  total: number;
+}
+
+export async function getProducts(): Promise<ProductListResponse> {
+  const res = await fetch(`${API_URL}/products`, {
+    next: { revalidate: 60 }, // Cache for 1 minute
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch products");
+  }
+
+  const data = await res.json();
+  return {
+    items: data.items.map((item: Record<string, unknown>) => ({
+      ...item,
+      price: Number(item.price),
+      compare_at_price: item.compare_at_price ? Number(item.compare_at_price) : null,
+    })),
+    total: data.total,
+  };
+}
+
 export async function getProduct(slug: string): Promise<Product> {
   const res = await fetch(`${API_URL}/products/${slug}`, {
     next: { revalidate: 60 }, // Cache for 1 minute

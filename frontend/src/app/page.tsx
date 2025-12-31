@@ -1,65 +1,137 @@
 import Image from "next/image";
+import Link from "next/link";
 
-export default function Home() {
+import { Card } from "@/components/ui/card";
+import { getProducts, Product } from "@/lib/api";
+
+function ProductCard({ product }: { product: Product }) {
+  const hasDiscount =
+    product.compare_at_price && product.compare_at_price > product.price;
+  const discountPercent = hasDiscount
+    ? Math.round(
+        ((product.compare_at_price! - product.price) /
+          product.compare_at_price!) *
+          100
+      )
+    : 0;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <Link href={`/p/${product.slug}`}>
+      <Card className="group overflow-hidden transition-all hover:shadow-lg">
+        {/* Product Image */}
+        <div className="relative aspect-square bg-gray-100">
+          {product.images[0] ? (
+            <Image
+              src={product.images[0]}
+              alt={product.name}
+              fill
+              className="object-cover transition-transform group-hover:scale-105"
+              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center text-gray-400">
+              No image
+            </div>
+          )}
+          {hasDiscount && (
+            <div className="absolute left-2 top-2 rounded-full bg-red-500 px-2 py-0.5 text-xs font-bold text-white">
+              -{discountPercent}%
+            </div>
+          )}
+        </div>
+
+        {/* Product Info */}
+        <div className="p-3">
+          <h3 className="line-clamp-2 text-sm font-medium text-gray-900 group-hover:text-blue-600">
+            {product.name}
+          </h3>
+          <div className="mt-2 flex items-baseline gap-2">
+            <span className="text-lg font-bold text-gray-900">
+              ${product.price.toFixed(2)}
+            </span>
+            {hasDiscount && (
+              <span className="text-sm text-gray-500 line-through">
+                ${product.compare_at_price!.toFixed(2)}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 text-xs text-gray-500">
+            Free shipping ({product.shipping_days_min}-{product.shipping_days_max} days)
+          </div>
+        </div>
+      </Card>
+    </Link>
+  );
+}
+
+export default async function Home() {
+  let products: Product[] = [];
+  let error = false;
+
+  try {
+    const response = await getProducts();
+    products = response.items;
+  } catch {
+    error = true;
+  }
+
+  return (
+    <main className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="border-b bg-white">
+        <div className="mx-auto max-w-7xl px-4 py-4">
+          <h1 className="text-xl font-bold text-gray-900">Ecom Arb Store</h1>
+        </div>
+      </header>
+
+      {/* Hero Section */}
+      <section className="bg-gradient-to-r from-blue-600 to-purple-600 py-12 text-white">
+        <div className="mx-auto max-w-7xl px-4 text-center">
+          <h2 className="text-3xl font-bold md:text-4xl">
+            Discover Great Products
+          </h2>
+          <p className="mt-2 text-lg opacity-90">
+            Quality items at unbeatable prices with free shipping
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </section>
+
+      {/* Products Grid */}
+      <section className="mx-auto max-w-7xl px-4 py-8">
+        <h2 className="mb-6 text-2xl font-bold text-gray-900">
+          Featured Products
+        </h2>
+
+        {error ? (
+          <div className="rounded-lg bg-red-50 p-8 text-center text-red-600">
+            <p>Failed to load products. Make sure the backend is running.</p>
+            <p className="mt-2 text-sm">
+              Run: <code className="rounded bg-red-100 px-2 py-1">make run-backend</code>
+            </p>
+          </div>
+        ) : products.length === 0 ? (
+          <div className="rounded-lg bg-gray-100 p-8 text-center text-gray-600">
+            <p>No products available yet.</p>
+            <p className="mt-2 text-sm">
+              Run: <code className="rounded bg-gray-200 px-2 py-1">python scripts/seed.py</code>
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {products.map((product) => (
+              <ProductCard key={product.id} product={product} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t bg-white py-8">
+        <div className="mx-auto max-w-7xl px-4 text-center text-sm text-gray-500">
+          <p>Free shipping on all orders</p>
+          <p className="mt-1">30-day money-back guarantee</p>
         </div>
-      </main>
-    </div>
+      </footer>
+    </main>
   );
 }
