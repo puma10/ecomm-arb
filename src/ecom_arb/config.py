@@ -25,11 +25,11 @@ class Settings(BaseSettings):
     # Stripe
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
-    stripe_success_url: str = "http://localhost:3000/order/{order_id}"
-    stripe_cancel_url: str = "http://localhost:3000/checkout/{product_slug}"
+    stripe_success_url: str = "http://localhost:4290/order/{order_id}"
+    stripe_cancel_url: str = "http://localhost:4290/checkout/{product_slug}"
 
     # Frontend
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "http://localhost:4290"
 
     # API
     api_prefix: str = "/api"
