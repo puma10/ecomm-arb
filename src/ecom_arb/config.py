@@ -1,0 +1,41 @@
+"""Application configuration using pydantic-settings."""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    # Application
+    app_name: str = "ecom-arb"
+    debug: bool = False
+    environment: str = "development"
+
+    # Database
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/ecom_arb"
+
+    # Stripe
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_success_url: str = "http://localhost:3000/order/{order_id}"
+    stripe_cancel_url: str = "http://localhost:3000/checkout/{product_slug}"
+
+    # Frontend
+    frontend_url: str = "http://localhost:3000"
+
+    # API
+    api_prefix: str = "/api"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Get cached settings instance."""
+    return Settings()
