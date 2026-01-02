@@ -50,6 +50,26 @@ class CJError(Exception):
         return " ".join(parts)
 
 
+def safe_decimal(val, default=None) -> Optional[Decimal]:
+    """Safely parse a value to Decimal, returning default on failure."""
+    if val is None or val == "":
+        return default
+    try:
+        return Decimal(str(val))
+    except Exception:
+        return default
+
+
+def safe_int(val, default=None) -> Optional[int]:
+    """Safely parse a value to int, returning default on failure."""
+    if val is None or val == "":
+        return default
+    try:
+        return int(val)
+    except Exception:
+        return default
+
+
 @dataclass
 class CJConfig:
     """Configuration for CJ Dropshipping API access.
@@ -89,18 +109,27 @@ class ProductVariant:
             vid=data.get("vid", ""),
             name=data.get("variantNameEn") or data.get("variantName", ""),
             sku=data.get("variantSku", ""),
-            weight=Decimal(str(data.get("variantWeight", 0))),
-            sell_price=Decimal(str(data.get("variantSellPrice", 0))),
-            length=Decimal(str(data["variantLength"])) if data.get("variantLength") else None,
-            width=Decimal(str(data["variantWidth"])) if data.get("variantWidth") else None,
-            height=Decimal(str(data["variantHeight"])) if data.get("variantHeight") else None,
+            weight=safe_decimal(data.get("variantWeight"), Decimal("0")),
+            sell_price=safe_decimal(data.get("variantSellPrice"), Decimal("0")),
+            length=safe_decimal(data.get("variantLength")),
+            width=safe_decimal(data.get("variantWidth")),
+            height=safe_decimal(data.get("variantHeight")),
         )
 
 
 @dataclass
 class Product:
-    """Product from CJ catalog."""
+    """Product from CJ catalog.
 
+    Contains comprehensive data for product analysis including:
+    - Basic product info (name, price, category)
+    - Warehouse/inventory data (location, stock levels)
+    - Shipping data (costs, delivery times, processing)
+    - Supplier data (ID, name, ratings)
+    - Sales/quality indicators (listed count, sale status)
+    """
+
+    # Core product info
     pid: str
     name: str
     sku: str
@@ -110,30 +139,89 @@ class Product:
     category_name: str
     weight: Optional[Decimal] = None
     description: Optional[str] = None
-    supplier_id: Optional[str] = None
-    supplier_name: Optional[str] = None
     variants: list[ProductVariant] = field(default_factory=list)
 
+    # Supplier info
+    supplier_id: Optional[str] = None
+    supplier_name: Optional[str] = None
+
+    # Warehouse/inventory info
+    warehouse_country: Optional[str] = None  # countryCode - where it ships from (CN, US, etc.)
+    warehouse_inventory: Optional[int] = None  # warehouseInventoryNum - total stock
+    verified_warehouse: bool = False  # verifiedWarehouse - verified inventory
+    total_verified_inventory: Optional[int] = None  # totalVerifiedInventory
+
+    # Shipping/delivery info
+    trial_freight: Optional[Decimal] = None  # Estimated shipping cost to US
+    is_free_shipping: bool = False  # isFreeShipping or addMarkStatus=1
+    freight_discount: Optional[Decimal] = None  # freightDiscount percentage
+    delivery_time_hours: Optional[int] = None  # deliveryTime: 24, 48, or 72
+    delivery_cycle_days: Optional[int] = None  # deliveryCycle - processing + shipping days
+
+    # Product status/quality
+    sale_status: Optional[str] = None  # saleStatus - ON_SALE, OUT_OF_STOCK, etc.
+    listed_num: Optional[int] = None  # listedNum - times this has been listed/sold
+    product_type: Optional[str] = None  # productType - ORDINARY, POD, etc.
+
+    # Additional raw data for debugging/analysis
+    raw_api_data: Optional[dict] = None
+
     @classmethod
-    def from_api_response(cls, data: dict) -> "Product":
-        """Create from API response data."""
+    def from_api_response(cls, data: dict, include_raw: bool = False) -> "Product":
+        """Create from API response data.
+
+        Args:
+            data: Raw API response dictionary
+            include_raw: If True, store raw API data for debugging
+        """
         variants = [
             ProductVariant.from_api_response(v)
             for v in data.get("variants", [])
         ]
+        # Parse free shipping flag (multiple possible indicators)
+        is_free = (
+            data.get("isFreeShipping") == True
+            or data.get("addMarkStatus") == 1
+            or str(data.get("isFreeShipping", "")).lower() == "true"
+        )
+
         return cls(
+            # Core info
             pid=data.get("pid", ""),
             name=data.get("productNameEn") or data.get("productName", ""),
             sku=data.get("productSku", ""),
             image_url=data.get("productImage", ""),
-            sell_price=Decimal(str(data.get("sellPrice", 0))),
+            sell_price=safe_decimal(data.get("sellPrice"), Decimal("0")),
             category_id=data.get("categoryId", ""),
             category_name=data.get("categoryName", ""),
-            weight=Decimal(str(data["productWeight"])) if data.get("productWeight") else None,
+            weight=safe_decimal(data.get("productWeight")),
             description=data.get("description"),
+            variants=variants,
+
+            # Supplier
             supplier_id=data.get("supplierId"),
             supplier_name=data.get("supplierName"),
-            variants=variants,
+
+            # Warehouse/inventory
+            warehouse_country=data.get("countryCode"),
+            warehouse_inventory=safe_int(data.get("warehouseInventoryNum")),
+            verified_warehouse=data.get("verifiedWarehouse") == True,
+            total_verified_inventory=safe_int(data.get("totalVerifiedInventory")),
+
+            # Shipping
+            trial_freight=safe_decimal(data.get("trialFreight")),
+            is_free_shipping=is_free,
+            freight_discount=safe_decimal(data.get("freightDiscount")),
+            delivery_time_hours=safe_int(data.get("deliveryTime")),
+            delivery_cycle_days=safe_int(data.get("deliveryCycle")),
+
+            # Status/quality
+            sale_status=data.get("saleStatus"),
+            listed_num=safe_int(data.get("listedNum")),
+            product_type=data.get("productType"),
+
+            # Raw data
+            raw_api_data=data if include_raw else None,
         )
 
 

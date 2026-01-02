@@ -13,6 +13,7 @@ import {
   clearScoredProducts,
   getScoringSettings,
   updateScoringSettings,
+  discoverProducts,
   ScoredProduct,
   ScoredProductFull,
   ScoringSettings,
@@ -46,6 +47,30 @@ function MarginIndicator({ margin }: { margin: number }) {
   else if (margin >= 0.15) color = "text-yellow-600";
 
   return <span className={`font-mono font-bold ${color}`}>{pct}%</span>;
+}
+
+function WarehouseBadge({ country }: { country: string | null }) {
+  if (!country) return <span className="text-xs text-gray-400">-</span>;
+
+  const colors: Record<string, string> = {
+    US: "bg-green-100 text-green-800 border-green-300",
+    CN: "bg-amber-100 text-amber-800 border-amber-300",
+    HK: "bg-amber-100 text-amber-800 border-amber-300",
+  };
+
+  const labels: Record<string, string> = {
+    US: "US",
+    CN: "China",
+    HK: "HK",
+  };
+
+  return (
+    <span
+      className={`inline-block rounded border px-1.5 py-0.5 text-xs font-medium ${colors[country] || "bg-gray-100 text-gray-700 border-gray-300"}`}
+    >
+      {labels[country] || country}
+    </span>
+  );
 }
 
 interface SettingInputProps {
@@ -89,6 +114,166 @@ function SettingInput({
         />
         <span className="w-8 text-xs text-gray-500">{suffix}</span>
       </div>
+    </div>
+  );
+}
+
+function DiscoverPanel({
+  onDiscover,
+  onSeedDemo,
+  onClose,
+  discovering,
+}: {
+  onDiscover: (keywords: string[], limit: number) => Promise<void>;
+  onSeedDemo: () => Promise<void>;
+  onClose: () => void;
+  discovering: boolean;
+}) {
+  const [keywords, setKeywords] = useState<string>("garden tools\nkitchen gadgets\npet supplies");
+  const [limit, setLimit] = useState(10);
+  const [mode, setMode] = useState<"cj" | "demo">("cj");
+
+  const handleDiscover = async () => {
+    if (mode === "demo") {
+      await onSeedDemo();
+    } else {
+      const keywordList = keywords
+        .split("\n")
+        .map((k) => k.trim())
+        .filter((k) => k.length > 0);
+      if (keywordList.length === 0) {
+        alert("Please enter at least one keyword");
+        return;
+      }
+      await onDiscover(keywordList, limit);
+    }
+    onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <Card
+        className="w-full max-w-lg bg-white p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-xl font-bold">Discover Products</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Mode Selector */}
+        <div className="mb-4 flex rounded-lg border border-gray-200 p-1">
+          <button
+            onClick={() => setMode("cj")}
+            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${
+              mode === "cj"
+                ? "bg-blue-600 text-white"
+                : "text-gray-600 hover:bg-gray-100"
+            }`}
+          >
+            CJ Dropshipping
+          </button>
+          <button
+            onClick={() => setMode("demo")}
+            className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition ${
+              mode === "demo"
+                ? "bg-blue-600 text-white"
+                : "text-gray-600 hover:bg-gray-100"
+            }`}
+          >
+            Demo Data
+          </button>
+        </div>
+
+        {mode === "cj" ? (
+          <>
+            <div className="mb-4">
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                Search Keywords (one per line)
+              </label>
+              <textarea
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+                rows={5}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="garden tools&#10;kitchen gadgets&#10;pet supplies"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                Products per keyword
+              </label>
+              <input
+                type="number"
+                value={limit}
+                onChange={(e) => setLimit(parseInt(e.target.value) || 10)}
+                min={1}
+                max={50}
+                className="w-24 rounded-md border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+
+            <div className="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
+              <strong>What happens:</strong>
+              <ol className="mt-2 list-inside list-decimal space-y-1">
+                <li>Search CJ Dropshipping for products matching your keywords</li>
+                <li>Calculate real shipping costs via CJ Freight API</li>
+                <li>Get real CPC estimates from Google Ads (if configured)</li>
+                <li>Score each product against your criteria</li>
+                <li>Save results for review</li>
+              </ol>
+            </div>
+
+            <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+              <strong>Requirements:</strong>
+              <ul className="mt-1 list-inside list-disc">
+                <li>CJ_API_KEY environment variable must be set</li>
+                <li>Google Ads credentials (optional, for real CPC)</li>
+              </ul>
+            </div>
+          </>
+        ) : (
+          <div className="mb-4 rounded-lg bg-gray-50 p-4 text-sm text-gray-700">
+            <p className="mb-2">
+              <strong>Demo Mode:</strong> Generate sample products with realistic
+              scoring data for testing the dashboard.
+            </p>
+            <p>
+              If Google Ads credentials are configured, demo products will use
+              real CPC data from Google Ads Keyword Planner.
+            </p>
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="rounded-md border px-4 py-2 text-sm font-medium hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleDiscover}
+            disabled={discovering}
+            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {discovering
+              ? "Discovering..."
+              : mode === "cj"
+                ? "Search CJ Products"
+                : "Generate Demo Products"}
+          </button>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -519,6 +704,80 @@ function ProductDetailModal({
           </div>
         </div>
 
+        {/* Supplier & Logistics */}
+        <div className="mb-6 grid gap-4 md:grid-cols-2">
+          <div className="rounded-lg border bg-gray-50 p-4">
+            <h4 className="mb-3 font-semibold text-gray-800">
+              Warehouse & Shipping
+            </h4>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-600">Warehouse Location</span>
+                <WarehouseBadge country={product.warehouse_country} />
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Shipping Time</span>
+                <span className="font-mono">
+                  {product.shipping_days_min && product.shipping_days_max
+                    ? `${product.shipping_days_min}-${product.shipping_days_max} days`
+                    : "-"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Weight</span>
+                <span className="font-mono">
+                  {product.weight_grams ? `${product.weight_grams}g` : "-"}
+                </span>
+              </div>
+              {product.warehouse_country === "CN" && (
+                <div className="mt-2 rounded bg-amber-100 p-2 text-xs text-amber-800">
+                  Ships from China - expect longer delivery times
+                </div>
+              )}
+              {product.warehouse_country === "US" && (
+                <div className="mt-2 rounded bg-green-100 p-2 text-xs text-green-800">
+                  Ships from US - fast domestic delivery
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-gray-50 p-4">
+            <h4 className="mb-3 font-semibold text-gray-800">
+              Supplier Info
+            </h4>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Supplier</span>
+                <span className="font-medium">
+                  {product.supplier_name || product.source.toUpperCase()}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Available Stock</span>
+                <span className={`font-mono font-bold ${
+                  product.inventory_count && product.inventory_count > 100 ? "text-green-600" : "text-amber-600"
+                }`}>
+                  {product.inventory_count?.toLocaleString() || "-"}
+                </span>
+              </div>
+              {product.source_url && (
+                <div className="mt-2 border-t pt-2">
+                  <a
+                    href={product.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline text-xs"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    View on {product.source.toUpperCase()} →
+                  </a>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Point Breakdown */}
         {product.point_breakdown && Object.keys(product.point_breakdown).length > 0 && (
           <div className="mb-6">
@@ -707,6 +966,10 @@ function ProductRow({
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
 }) {
+  const shippingDays = product.shipping_days_min && product.shipping_days_max
+    ? `${product.shipping_days_min}-${product.shipping_days_max}d`
+    : "-";
+
   return (
     <tr
       className="cursor-pointer border-b hover:bg-gray-50"
@@ -730,8 +993,12 @@ function ProductRow({
       <td className="px-4 py-3 text-right font-mono">
         ${product.selling_price.toFixed(2)}
       </td>
+      <td className="px-4 py-3 text-center">
+        <WarehouseBadge country={product.warehouse_country} />
+        <div className="text-xs text-gray-500 mt-0.5">{shippingDays}</div>
+      </td>
       <td className="px-4 py-3 text-right font-mono text-gray-600">
-        ${product.cogs?.toFixed(2) || "-"}
+        {product.inventory_count?.toLocaleString() || "-"}
       </td>
       <td className="px-4 py-3">
         <div className="flex gap-2">
@@ -771,9 +1038,11 @@ export default function AdminPage() {
   } | null>(null);
   const [seeding, setSeeding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showDiscover, setShowDiscover] = useState(false);
   const [settings, setSettings] = useState<ScoringSettings | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<ScoredProductFull | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
 
   const loadProducts = async () => {
     setLoading(true);
@@ -836,6 +1105,7 @@ export default function AdminPage() {
 
   const handleSeedDemo = async () => {
     setSeeding(true);
+    setDiscovering(true);
     try {
       const result = await seedDemoProducts(25);
       setActionMessage({ type: "success", text: result.message });
@@ -847,8 +1117,29 @@ export default function AdminPage() {
       });
     } finally {
       setSeeding(false);
+      setDiscovering(false);
     }
-    setTimeout(() => setActionMessage(null), 3000);
+    setTimeout(() => setActionMessage(null), 5000);
+  };
+
+  const handleDiscoverFromCJ = async (keywords: string[], limit: number) => {
+    setDiscovering(true);
+    try {
+      const result = await discoverProducts({
+        keywords,
+        limit_per_keyword: limit,
+      });
+      setActionMessage({ type: "success", text: result.message });
+      loadProducts();
+    } catch (err) {
+      setActionMessage({
+        type: "error",
+        text: err instanceof Error ? err.message : "Failed to discover products",
+      });
+    } finally {
+      setDiscovering(false);
+    }
+    setTimeout(() => setActionMessage(null), 5000);
   };
 
   const handleClearAll = async () => {
@@ -913,11 +1204,17 @@ export default function AdminPage() {
             </p>
           </div>
           <div className="flex items-center gap-4">
+            <Link
+              href="/admin/crawl"
+              className="flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Crawl Management
+            </Link>
             <button
               onClick={handleOpenSettings}
               className="flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
-              ⚙️ Settings
+              Settings
             </button>
             <Link
               href="/"
@@ -935,6 +1232,16 @@ export default function AdminPage() {
           settings={settings}
           onUpdate={handleUpdateSettings}
           onClose={() => setShowSettings(false)}
+        />
+      )}
+
+      {/* Discover Modal */}
+      {showDiscover && (
+        <DiscoverPanel
+          onDiscover={handleDiscoverFromCJ}
+          onSeedDemo={handleSeedDemo}
+          onClose={() => setShowDiscover(false)}
+          discovering={discovering}
         />
       )}
 
@@ -998,11 +1305,11 @@ export default function AdminPage() {
             </span>
             <div className="ml-auto flex gap-2">
               <button
-                onClick={handleSeedDemo}
-                disabled={seeding}
+                onClick={() => setShowDiscover(true)}
+                disabled={discovering}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                {seeding ? "Discovering..." : "Discover Products"}
+                {discovering ? "Discovering..." : "Discover Products"}
               </button>
               <button
                 onClick={handleClearAll}
@@ -1053,7 +1360,8 @@ export default function AdminPage() {
                     <th className="px-4 py-3 text-right">Rank</th>
                     <th className="px-4 py-3 text-right">Net Margin</th>
                     <th className="px-4 py-3 text-right">Price</th>
-                    <th className="px-4 py-3 text-right">COGS</th>
+                    <th className="px-4 py-3 text-center">Warehouse</th>
+                    <th className="px-4 py-3 text-right">Stock</th>
                     <th className="px-4 py-3">Actions</th>
                   </tr>
                 </thead>

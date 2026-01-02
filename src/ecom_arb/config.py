@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     google_ads_developer_token: str = ""
     google_ads_customer_id: str = ""  # Format: 123-456-7890
 
+    # CJ Dropshipping
+    cj_api_key: str = ""  # Format: CJUserNum@api@[key]
+
+    # Webhook / SerpWatch
+    webhook_base_url: str = "http://localhost:6025"  # ngrok URL for SerpWatch postbacks
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -24,6 +24,9 @@ from ecom_arb.scoring.scorer import score_product
 
 logger = logging.getLogger(__name__)
 
+# Cache CJ client to avoid repeated auth calls
+_cj_client_cache: dict = {"client": None, "expires": None}
+
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
@@ -45,6 +48,7 @@ class DiscoverResponse(BaseModel):
     status: str
     message: str
     discovered: int = 0
+    skipped: int = 0
     scored: int = 0
     passed: int = 0
 
@@ -103,28 +107,348 @@ DEMO_PRODUCTS = [
 @router.post("/discover", response_model=DiscoverResponse)
 async def discover_products(
     request: DiscoverRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> DiscoverResponse:
     """Discover and score products from CJ Dropshipping.
 
     Requires CJ_API_KEY environment variable to be set.
-    This runs the discovery in the background.
+    Searches CJ for products, calculates shipping, gets real CPC, and scores.
     """
-    import os
+    from datetime import datetime, timedelta
+    from ecom_arb.config import get_settings
+    from ecom_arb.integrations.cj_dropshipping import CJDropshippingClient, CJConfig, CJError
 
-    if not os.getenv("CJ_API_KEY"):
+    app_settings = get_settings()
+    cj_api_key = app_settings.cj_api_key
+    if not cj_api_key:
         raise HTTPException(
             status_code=400,
             detail="CJ_API_KEY not configured. Use /admin/seed-demo for testing.",
         )
 
-    # Would run discovery in background
-    # For now, return info about configuration
+    # Use cached client if available and not expired
+    global _cj_client_cache
+    now = datetime.now()
+
+    if _cj_client_cache["client"] and _cj_client_cache["expires"] and now < _cj_client_cache["expires"]:
+        cj_client = _cj_client_cache["client"]
+        logger.info("Using cached CJ client")
+    else:
+        # Initialize new CJ client
+        try:
+            config = CJConfig(api_key=cj_api_key)
+            cj_client = CJDropshippingClient(config)
+            cj_client.get_access_token()
+            # Cache for 1 hour (tokens are valid longer, but be safe)
+            _cj_client_cache["client"] = cj_client
+            _cj_client_cache["expires"] = now + timedelta(hours=1)
+            logger.info("Created new CJ client, cached for 1 hour")
+        except (ValueError, CJError) as e:
+            error_msg = str(e)
+            if "429" in error_msg:
+                raise HTTPException(
+                    status_code=429,
+                    detail="CJ API rate limit exceeded. CJ allows 30 requests/second. Wait 1-2 minutes and try again.",
+                )
+            raise HTTPException(status_code=400, detail=f"CJ API error: {error_msg}")
+
+    # Get current scoring settings
+    settings = await get_or_create_settings(db)
+    scoring_config = settings_to_scoring_config(settings)
+
+    # Try to set up Google Ads client for real CPC
+    google_ads_client = None
+    try:
+        from ecom_arb.integrations.google_ads import GoogleAdsClient, GoogleAdsConfig
+
+        required_vars = [
+            "GOOGLE_ADS_CLIENT_ID",
+            "GOOGLE_ADS_CLIENT_SECRET",
+            "GOOGLE_ADS_REFRESH_TOKEN",
+            "GOOGLE_ADS_DEVELOPER_TOKEN",
+            "GOOGLE_ADS_CUSTOMER_ID",
+        ]
+        if all(os.getenv(var) for var in required_vars):
+            gads_config = GoogleAdsConfig(
+                client_id=os.getenv("GOOGLE_ADS_CLIENT_ID", ""),
+                client_secret=os.getenv("GOOGLE_ADS_CLIENT_SECRET", ""),
+                refresh_token=os.getenv("GOOGLE_ADS_REFRESH_TOKEN", ""),
+                developer_token=os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", ""),
+                customer_id=os.getenv("GOOGLE_ADS_CUSTOMER_ID", ""),
+            )
+            google_ads_client = GoogleAdsClient(gads_config)
+            logger.info("Google Ads client configured for real CPC")
+    except Exception as e:
+        logger.warning(f"Could not configure Google Ads: {e}")
+
+    discovered = 0
+    skipped = 0
+    scored = 0
+    passed = 0
+    errors = []
+
+    for keyword in request.keywords:
+        try:
+            # Search CJ for products
+            cj_products = cj_client.list_products(
+                keyword=keyword,
+                page=1,
+                page_size=request.limit_per_keyword,
+            )
+            discovered += len(cj_products)
+            logger.info(f"Found {len(cj_products)} products for '{keyword}'")
+
+            # Collect keywords for CPC lookup (batch to reduce API calls)
+            product_keywords = []
+            for cj_prod in cj_products:
+                # Extract key terms from product name for CPC lookup
+                clean_name = cj_prod.name.lower()
+                for prefix in ["premium", "professional", "deluxe", "ultra", "smart"]:
+                    clean_name = clean_name.replace(prefix, "")
+                product_keywords.append(clean_name.strip()[:50])
+
+            # Get real CPC data if available
+            cpc_estimates: dict[str, float] = {}
+            if google_ads_client and product_keywords:
+                try:
+                    # Limit to 20 keywords per API call
+                    unique_keywords = list(set(product_keywords))[:20]
+                    estimates = google_ads_client.get_keyword_cpc_estimates(unique_keywords)
+                    for est in estimates:
+                        cpc_estimates[est.keyword.lower()] = float(est.avg_cpc)
+                except Exception as e:
+                    logger.warning(f"Could not fetch CPC for '{keyword}': {e}")
+
+            # EU country codes to filter out
+            eu_countries = {
+                "DE", "FR", "IT", "ES", "NL", "PL", "BE", "AT", "SE", "DK",
+                "FI", "IE", "PT", "CZ", "RO", "HU", "SK", "BG", "HR", "SI",
+                "LT", "LV", "EE", "CY", "LU", "MT", "GR", "UK", "GB"
+            }
+
+            for cj_prod in cj_products:
+                try:
+                    # Skip EU warehouse products
+                    warehouse = cj_prod.warehouse_country or "CN"
+                    if warehouse.upper() in eu_countries:
+                        logger.debug(f"Skipping EU product {cj_prod.pid}: warehouse={warehouse}")
+                        continue
+
+                    # Skip if already in database (check early to avoid wasted work)
+                    from sqlalchemy import select
+                    existing = await db.execute(
+                        select(ScoredProduct).where(
+                            ScoredProduct.source_product_id == cj_prod.pid
+                        )
+                    )
+                    if existing.scalar_one_or_none():
+                        skipped += 1
+                        logger.debug(f"Skipping existing product {cj_prod.pid}")
+                        continue
+
+                    # Calculate shipping cost to US
+                    # Priority: 1) Free shipping, 2) trial_freight from API, 3) freight API call, 4) fallback
+                    if cj_prod.is_free_shipping:
+                        shipping_cost = Decimal("0.00")
+                        logger.debug(f"Free shipping for {cj_prod.pid}")
+                    elif cj_prod.trial_freight and cj_prod.trial_freight > 0:
+                        shipping_cost = cj_prod.trial_freight
+                        logger.debug(f"Using trial_freight ${shipping_cost} for {cj_prod.pid}")
+                    elif cj_prod.variants:
+                        # Try freight API as fallback
+                        shipping_cost = Decimal("8.00")  # Default if API fails
+                        try:
+                            freight_options = cj_client.calculate_freight(
+                                start_country="CN",
+                                end_country="US",
+                                products=[{"vid": cj_prod.variants[0].vid, "quantity": 1}],
+                            )
+                            if freight_options:
+                                shipping_cost = freight_options[0].price
+                                logger.debug(f"Freight API: ${shipping_cost} for {cj_prod.pid}")
+                        except CJError as e:
+                            logger.debug(f"Freight calc failed for {cj_prod.pid}: {e}")
+                    else:
+                        # No shipping info available - estimate by weight
+                        weight_kg = float(cj_prod.weight or 500) / 1000
+                        shipping_cost = Decimal(str(round(3.0 + weight_kg * 5.0, 2)))  # $3 base + $5/kg
+                        logger.debug(f"Estimated shipping ${shipping_cost} for {cj_prod.pid} ({weight_kg}kg)")
+
+                    # Calculate shipping time based on warehouse location
+                    warehouse = cj_prod.warehouse_country or "CN"
+                    if warehouse == "US":
+                        # US warehouse: fast domestic shipping
+                        ship_days_min = 3
+                        ship_days_max = 7
+                        has_fast = True
+                    elif warehouse in ["CN", "HK"]:
+                        # China/HK warehouse: standard international
+                        if cj_prod.delivery_cycle_days:
+                            # Use CJ's delivery cycle if available
+                            ship_days_min = max(7, cj_prod.delivery_cycle_days - 3)
+                            ship_days_max = cj_prod.delivery_cycle_days + 5
+                        else:
+                            ship_days_min = 10
+                            ship_days_max = 20
+                        has_fast = False
+                    else:
+                        # Other warehouses (EU, etc.)
+                        ship_days_min = 7
+                        ship_days_max = 15
+                        has_fast = False
+
+                    # Add dispatch time if available (24/48/72 hours)
+                    if cj_prod.delivery_time_hours:
+                        dispatch_days = cj_prod.delivery_time_hours // 24
+                        ship_days_min += dispatch_days
+                        ship_days_max += dispatch_days
+
+                    # Determine selling price (markup from cost)
+                    product_cost = float(cj_prod.sell_price)
+                    # Target ~70% margin: selling_price = cost / 0.30
+                    selling_price = round(product_cost / 0.30, 2)
+                    # Ensure minimum price
+                    selling_price = max(selling_price, float(scoring_config.min_selling_price))
+
+                    # Get CPC estimate
+                    clean_name = cj_prod.name.lower()
+                    for prefix in ["premium", "professional", "deluxe", "ultra", "smart"]:
+                        clean_name = clean_name.replace(prefix, "")
+                    clean_name = clean_name.strip()[:50]
+
+                    estimated_cpc = cpc_estimates.get(clean_name, 0.50)  # Default fallback
+
+                    # Map CJ category to our categories
+                    category = _map_cj_category(cj_prod.category_name)
+
+                    # Determine supplier quality based on CJ data
+                    # Use listed_num as a proxy for supplier reliability
+                    if cj_prod.listed_num and cj_prod.listed_num > 1000:
+                        supplier_rating = 4.9
+                        supplier_feedback = cj_prod.listed_num
+                    elif cj_prod.listed_num and cj_prod.listed_num > 100:
+                        supplier_rating = 4.7
+                        supplier_feedback = cj_prod.listed_num * 5
+                    else:
+                        supplier_rating = 4.5
+                        supplier_feedback = 500
+
+                    # Create scoring product
+                    product = Product(
+                        id=cj_prod.pid,
+                        name=cj_prod.name,
+                        product_cost=product_cost,
+                        shipping_cost=float(shipping_cost),
+                        selling_price=selling_price,
+                        category=category,
+                        requires_sizing=False,
+                        is_fragile=False,
+                        weight_grams=int(cj_prod.weight) if cj_prod.weight else 500,  # CJ returns weight in grams
+                        supplier_rating=supplier_rating,
+                        supplier_age_months=24,  # CJ doesn't expose this
+                        supplier_feedback_count=supplier_feedback,
+                        shipping_days_min=ship_days_min,
+                        shipping_days_max=ship_days_max,
+                        has_fast_shipping=has_fast,
+                        estimated_cpc=estimated_cpc,
+                        monthly_search_volume=1000,
+                        amazon_prime_exists=False,
+                        amazon_review_count=0,
+                        source="cj_dropshipping",
+                        source_url=f"https://cjdropshipping.com/search?keyword={cj_prod.pid}",
+                    )
+
+                    # Score the product
+                    score = score_product(product, scoring_config)
+                    scored += 1
+
+                    if score.passed_filters:
+                        passed += 1
+
+                    # Save to database with comprehensive CJ data
+                    scored_product = ScoredProduct(
+                        source_product_id=cj_prod.pid,
+                        name=cj_prod.name,
+                        source="cj_dropshipping",
+                        source_url=f"https://cjdropshipping.com/search?keyword={cj_prod.pid}",
+                        product_cost=Decimal(str(product_cost)),
+                        shipping_cost=shipping_cost,
+                        selling_price=Decimal(str(selling_price)),
+                        category=category.value,
+                        estimated_cpc=Decimal(str(estimated_cpc)),
+                        # CJ logistics data
+                        weight_grams=int(cj_prod.weight) if cj_prod.weight else None,
+                        shipping_days_min=ship_days_min,
+                        shipping_days_max=ship_days_max,
+                        warehouse_country=warehouse,
+                        # CJ supplier data
+                        supplier_name=cj_prod.supplier_name,
+                        inventory_count=cj_prod.warehouse_inventory,
+                        # Calculated scores
+                        cogs=Decimal(str(score.cogs)),
+                        gross_margin=Decimal(str(score.gross_margin)),
+                        net_margin=Decimal(str(score.net_margin)),
+                        max_cpc=Decimal(str(score.max_cpc)),
+                        cpc_buffer=Decimal(str(score.cpc_buffer)),
+                        passed_filters=score.passed_filters,
+                        rejection_reasons=score.rejection_reasons,
+                        points=score.points,
+                        point_breakdown=score.point_breakdown,
+                        rank_score=Decimal(str(score.rank_score)) if score.rank_score else None,
+                        recommendation=score.recommendation,
+                    )
+                    db.add(scored_product)
+
+                except Exception as e:
+                    logger.warning(f"Error processing product {cj_prod.pid}: {e}")
+                    errors.append(str(e))
+
+        except CJError as e:
+            error_msg = str(e)
+            logger.error(f"CJ API error for keyword '{keyword}': {error_msg}")
+            if "429" in error_msg:
+                errors.append(f"Rate limited on '{keyword}' - wait 1-2 min")
+            else:
+                errors.append(f"CJ error for '{keyword}': {error_msg}")
+
+    await db.commit()
+
+    cpc_source = "real Google Ads CPC" if google_ads_client else "estimated CPC"
+    error_msg = f" ({len(errors)} errors)" if errors else ""
+
+    skipped_msg = f", {skipped} already in DB" if skipped else ""
     return DiscoverResponse(
-        status="error",
-        message="Discovery requires API keys. Use /admin/seed-demo for testing.",
+        status="success",
+        message=f"Discovered {discovered}, scored {scored}, {passed} passed{skipped_msg} using {cpc_source}{error_msg}",
+        discovered=discovered,
+        skipped=skipped,
+        scored=scored,
+        passed=passed,
     )
+
+
+def _map_cj_category(cj_category: str) -> ProductCategory:
+    """Map CJ category name to our ProductCategory enum."""
+    cj_lower = cj_category.lower()
+
+    if any(x in cj_lower for x in ["garden", "outdoor", "patio"]):
+        return ProductCategory.GARDEN
+    elif any(x in cj_lower for x in ["kitchen", "cook", "bake"]):
+        return ProductCategory.KITCHEN
+    elif any(x in cj_lower for x in ["pet", "dog", "cat"]):
+        return ProductCategory.PET
+    elif any(x in cj_lower for x in ["office", "desk", "work"]):
+        return ProductCategory.OFFICE
+    elif any(x in cj_lower for x in ["craft", "art", "sewing"]):
+        return ProductCategory.CRAFTS
+    elif any(x in cj_lower for x in ["tool", "hardware"]):
+        return ProductCategory.TOOLS
+    elif any(x in cj_lower for x in ["camp", "hike", "outdoor", "sport"]):
+        return ProductCategory.OUTDOOR
+    elif any(x in cj_lower for x in ["home", "decor", "furniture"]):
+        return ProductCategory.HOME_DECOR
+    else:
+        return ProductCategory.HOME_DECOR  # Default
 
 
 @router.post("/seed-demo", response_model=SeedDemoResponse)

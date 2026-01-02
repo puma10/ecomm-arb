@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -122,6 +122,16 @@ class ScoredProduct(Base):
     # Market data
     estimated_cpc: Mapped[Decimal] = mapped_column(Numeric(10, 2))
 
+    # Shipping/logistics data (from supplier)
+    weight_grams: Mapped[int | None] = mapped_column(nullable=True)
+    shipping_days_min: Mapped[int | None] = mapped_column(nullable=True)
+    shipping_days_max: Mapped[int | None] = mapped_column(nullable=True)
+    warehouse_country: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    # Supplier data
+    supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    inventory_count: Mapped[int | None] = mapped_column(nullable=True)
+
     # Calculated financials
     cogs: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     gross_margin: Mapped[Decimal] = mapped_column(Numeric(10, 4))
@@ -216,6 +226,100 @@ class ScoringSettings(Base):
 
     def __repr__(self) -> str:
         return f"<ScoringSettings max_cpc={self.max_cpc_threshold}>"
+
+
+class CrawlJobStatus(str, enum.Enum):
+    """Crawl job status enumeration."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class CrawlJob(Base):
+    """Crawl job model for tracking SerpWatch crawl operations."""
+
+    __tablename__ = "crawl_jobs"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    status: Mapped[CrawlJobStatus] = mapped_column(
+        Enum(CrawlJobStatus),
+        default=CrawlJobStatus.PENDING,
+    )
+
+    # Configuration (set at start)
+    config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # config structure:
+    # {
+    #     "keywords": ["garden tools", "kitchen"],
+    #     "price_min": 5.0,
+    #     "price_max": 50.0,
+    #     "include_warehouses": ["US", "CN"],
+    #     "exclude_warehouses": [],
+    #     "include_categories": [],
+    #     "exclude_categories": []
+    # }
+
+    # Progress tracking
+    progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # progress structure:
+    # {
+    #     "search_urls_submitted": 5,
+    #     "search_urls_completed": 3,
+    #     "product_urls_found": 1234,
+    #     "product_urls_skipped_existing": 800,
+    #     "product_urls_submitted": 434,
+    #     "product_urls_completed": 430,
+    #     "products_parsed": 425,
+    #     "products_skipped_filtered": 56,
+    #     "products_scored": 369,
+    #     "products_passed_scoring": 89,
+    #     "errors": 5
+    # }
+
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Live logs (list of log entry dicts)
+    logs: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # logs structure: [{"ts": "2024-01-02T10:00:00", "level": "info", "msg": "..."}]
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<CrawlJob {self.id}: {self.status.value}>"
+
+
+class ExclusionRule(Base):
+    """Exclusion rule for filtering products during crawl."""
+
+    __tablename__ = "exclusion_rules"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    rule_type: Mapped[str] = mapped_column(String(50), index=True)  # country, category, supplier, keyword
+    value: Mapped[str] = mapped_column(String(255))
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    # Unique constraint on rule_type + value
+    __table_args__ = (
+        UniqueConstraint("rule_type", "value", name="uq_exclusion_rule_type_value"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ExclusionRule {self.rule_type}:{self.value}>"
 
 
 class Order(Base):

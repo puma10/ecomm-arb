@@ -40,12 +40,22 @@ class ScoredProductListItem(BaseModel):
     id: UUID
     source_product_id: str
     source: str
+    source_url: str | None
     name: str
     selling_price: Decimal
     category: str
     cogs: Decimal
     gross_margin: Decimal
     net_margin: Decimal
+    # Shipping/logistics
+    weight_grams: int | None
+    shipping_days_min: int | None
+    shipping_days_max: int | None
+    warehouse_country: str | None
+    # Supplier
+    supplier_name: str | None
+    inventory_count: int | None
+    # Scoring
     points: int | None
     rank_score: Decimal | None
     recommendation: str
@@ -79,6 +89,16 @@ class ScoredProductResponse(BaseModel):
     selling_price: Decimal
     category: str
     estimated_cpc: Decimal
+
+    # Shipping/logistics data (from supplier)
+    weight_grams: int | None
+    shipping_days_min: int | None
+    shipping_days_max: int | None
+    warehouse_country: str | None
+
+    # Supplier data
+    supplier_name: str | None
+    inventory_count: int | None
 
     # Calculated financials
     cogs: Decimal
@@ -201,6 +221,11 @@ async def rescore_product(
     except ValueError:
         category = ProductCategory.HOME_DECOR  # Default fallback
 
+    # Use stored shipping data if available, otherwise use defaults
+    ship_min = scored_product.shipping_days_min or 7
+    ship_max = scored_product.shipping_days_max or 14
+    has_fast = ship_max <= 10
+
     scoring_input = ScoringProduct(
         id=scored_product.source_product_id,
         name=scored_product.name,
@@ -210,13 +235,13 @@ async def rescore_product(
         category=category,
         requires_sizing=False,
         is_fragile=False,
-        weight_grams=500,  # Default value
+        weight_grams=scored_product.weight_grams or 500,
         supplier_rating=4.8,  # Default value
         supplier_age_months=24,  # Default value
         supplier_feedback_count=1000,  # Default value
-        shipping_days_min=7,
-        shipping_days_max=14,
-        has_fast_shipping=True,
+        shipping_days_min=ship_min,
+        shipping_days_max=ship_max,
+        has_fast_shipping=has_fast,
         estimated_cpc=float(scored_product.estimated_cpc),
         monthly_search_volume=1000,  # Default value
         amazon_prime_exists=False,  # Default value
@@ -326,8 +351,8 @@ async def approve_product(
         supplier_sku=scored.source_product_id,
         supplier_url=scored.source_url or "",
         shipping_cost=scored.shipping_cost,
-        shipping_days_min=7,
-        shipping_days_max=14,
+        shipping_days_min=scored.shipping_days_min or 7,
+        shipping_days_max=scored.shipping_days_max or 14,
         active=True,
     )
 

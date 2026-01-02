@@ -166,12 +166,22 @@ export interface ScoredProduct {
   id: string;
   source_product_id: string;
   source: string;
+  source_url: string | null;
   name: string;
   selling_price: number;
   category: string;
   cogs: number;
   gross_margin: number;
   net_margin: number;
+  // Shipping/logistics
+  weight_grams: number | null;
+  shipping_days_min: number | null;
+  shipping_days_max: number | null;
+  warehouse_country: string | null;
+  // Supplier
+  supplier_name: string | null;
+  inventory_count: number | null;
+  // Scoring
   points: number | null;
   rank_score: number | null;
   recommendation: string;
@@ -224,7 +234,6 @@ export async function getScoredProducts(params?: {
 }
 
 export interface ScoredProductFull extends ScoredProduct {
-  source_url: string | null;
   product_cost: number;
   shipping_cost: number;
   estimated_cpc: number;
@@ -323,6 +332,37 @@ export async function clearScoredProducts(): Promise<void> {
   }
 }
 
+// Admin - Discover from CJ
+
+export interface DiscoverRequest {
+  keywords: string[];
+  limit_per_keyword: number;
+}
+
+export interface DiscoverResponse {
+  status: string;
+  message: string;
+  discovered: number;
+  skipped: number;
+  scored: number;
+  passed: number;
+}
+
+export async function discoverProducts(request: DiscoverRequest): Promise<DiscoverResponse> {
+  const res = await fetch(`${API_URL}/admin/discover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to discover products");
+  }
+
+  return res.json();
+}
+
 // Admin - Scoring Settings
 
 export interface ScoringSettings {
@@ -372,4 +412,167 @@ export async function updateScoringSettings(
   }
 
   return res.json();
+}
+
+// ============================================================================
+// Crawl System API
+// ============================================================================
+
+export interface CrawlConfig {
+  keywords: string[];
+  price_min: number;
+  price_max: number;
+  include_warehouses: string[];
+  exclude_warehouses: string[];
+  include_categories: string[];
+  exclude_categories: string[];
+}
+
+export interface CrawlProgress {
+  search_urls_submitted: number;
+  search_urls_completed: number;
+  product_urls_found: number;
+  product_urls_skipped_existing: number;
+  product_urls_submitted: number;
+  product_urls_completed: number;
+  products_parsed: number;
+  products_skipped_filtered: number;
+  products_scored: number;
+  products_passed_scoring: number;
+  errors: number;
+}
+
+export interface CrawlJob {
+  id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  config: CrawlConfig;
+  progress: CrawlProgress;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface ExclusionRule {
+  id: string;
+  rule_type: 'country' | 'category' | 'supplier' | 'keyword';
+  value: string;
+  reason: string | null;
+  created_at: string;
+}
+
+export interface StartCrawlResponse {
+  job_id: string;
+  status: string;
+  message: string;
+  search_urls_submitted: number;
+}
+
+export async function startCrawl(config: CrawlConfig): Promise<StartCrawlResponse> {
+  const res = await fetch(`${API_URL}/crawl/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to start crawl");
+  }
+
+  return res.json();
+}
+
+export async function getCrawlJob(jobId: string): Promise<CrawlJob> {
+  const res = await fetch(`${API_URL}/crawl/${jobId}`, { cache: "no-store" });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch crawl job");
+  }
+
+  return res.json();
+}
+
+export async function getCrawlJobs(): Promise<CrawlJob[]> {
+  const res = await fetch(`${API_URL}/crawl/jobs`, { cache: "no-store" });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch crawl jobs");
+  }
+
+  const data = await res.json();
+  return data.items || [];
+}
+
+export async function cancelCrawl(jobId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/crawl/${jobId}`, {
+    method: "DELETE",
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to cancel crawl");
+  }
+}
+
+export interface CrawlLogEntry {
+  ts: string;
+  level: string;
+  msg: string;
+}
+
+export interface CrawlLogsResponse {
+  job_id: string;
+  logs: CrawlLogEntry[];
+}
+
+export async function getCrawlLogs(jobId: string, since: number = 0): Promise<CrawlLogsResponse> {
+  const res = await fetch(`${API_URL}/crawl/${jobId}/logs?since=${since}`, { cache: "no-store" });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch crawl logs");
+  }
+
+  return res.json();
+}
+
+export async function getExclusionRules(): Promise<ExclusionRule[]> {
+  const res = await fetch(`${API_URL}/exclusions`, { cache: "no-store" });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch exclusion rules");
+  }
+
+  const data = await res.json();
+  return data.items || [];
+}
+
+export async function addExclusionRule(rule: {
+  rule_type: string;
+  value: string;
+  reason?: string;
+}): Promise<ExclusionRule> {
+  const res = await fetch(`${API_URL}/exclusions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rule),
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to add exclusion rule");
+  }
+
+  return res.json();
+}
+
+export async function deleteExclusionRule(id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/exclusions/${id}`, {
+    method: "DELETE",
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to delete exclusion rule");
+  }
 }
