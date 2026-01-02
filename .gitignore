@@ -80,3 +80,7 @@ storage.sqlite3*
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# SQLite WAL files
+*.db-shm
+*.db-wal
