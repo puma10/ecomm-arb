@@ -185,6 +185,8 @@ export interface ScoredProduct {
   points: number | null;
   rank_score: number | null;
   recommendation: string;
+  // Association
+  crawl_job_id: string | null;
   created_at: string;
 }
 
@@ -204,11 +206,15 @@ export interface ApproveProductResponse {
 
 export async function getScoredProducts(params?: {
   recommendation?: string;
+  crawl_job_id?: string;
+  search?: string;
   limit?: number;
   offset?: number;
 }): Promise<ScoredProductListResponse> {
   const searchParams = new URLSearchParams();
   if (params?.recommendation) searchParams.set("recommendation", params.recommendation);
+  if (params?.crawl_job_id) searchParams.set("crawl_job_id", params.crawl_job_id);
+  if (params?.search) searchParams.set("search", params.search);
   if (params?.limit) searchParams.set("limit", params.limit.toString());
   if (params?.offset) searchParams.set("offset", params.offset.toString());
 

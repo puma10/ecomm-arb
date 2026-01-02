@@ -14,6 +14,7 @@ import {
   getScoringSettings,
   updateScoringSettings,
   discoverProducts,
+  getCrawlJobs,
   ScoredProduct,
   ScoredProductFull,
   ScoringSettings,
@@ -970,6 +971,16 @@ function ProductRow({
     ? `${product.shipping_days_min}-${product.shipping_days_max}d`
     : "-";
 
+  // Format created_at date
+  const createdAt = product.created_at
+    ? new Date(product.created_at).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "-";
+
   return (
     <tr
       className="cursor-pointer border-b hover:bg-gray-50"
@@ -984,9 +995,6 @@ function ProductRow({
       <td className="px-4 py-3 text-right">
         <RecommendationBadge rec={product.recommendation} />
       </td>
-      <td className="px-4 py-3 text-right font-mono">
-        {product.rank_score?.toFixed(1) || "-"}
-      </td>
       <td className="px-4 py-3 text-right">
         <MarginIndicator margin={product.net_margin} />
       </td>
@@ -997,8 +1005,8 @@ function ProductRow({
         <WarehouseBadge country={product.warehouse_country} />
         <div className="text-xs text-gray-500 mt-0.5">{shippingDays}</div>
       </td>
-      <td className="px-4 py-3 text-right font-mono text-gray-600">
-        {product.inventory_count?.toLocaleString() || "-"}
+      <td className="px-4 py-3 text-right text-sm text-gray-600">
+        {createdAt}
       </td>
       <td className="px-4 py-3">
         <div className="flex gap-2">
@@ -1031,6 +1039,9 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("");
+  const [search, setSearch] = useState<string>("");
+  const [crawlJobId, setCrawlJobId] = useState<string>("");
+  const [crawlJobs, setCrawlJobs] = useState<{ id: string; keywords: string[] }[]>([]);
   const [total, setTotal] = useState(0);
   const [actionMessage, setActionMessage] = useState<{
     type: "success" | "error";
@@ -1050,6 +1061,8 @@ export default function AdminPage() {
     try {
       const response = await getScoredProducts({
         recommendation: filter || undefined,
+        crawl_job_id: crawlJobId || undefined,
+        search: search || undefined,
         limit: 50,
       });
       setProducts(response.items);
@@ -1058,6 +1071,20 @@ export default function AdminPage() {
       setError(err instanceof Error ? err.message : "Failed to load products");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadCrawlJobs = async () => {
+    try {
+      const jobs = await getCrawlJobs();
+      setCrawlJobs(
+        jobs.map((j) => ({
+          id: j.id,
+          keywords: j.config.keywords || [],
+        }))
+      );
+    } catch (err) {
+      console.error("Failed to load crawl jobs:", err);
     }
   };
 
@@ -1072,8 +1099,12 @@ export default function AdminPage() {
 
   useEffect(() => {
     loadProducts();
+  }, [filter, crawlJobId, search]);
+
+  useEffect(() => {
     loadSettings();
-  }, [filter]);
+    loadCrawlJobs();
+  }, []);
 
   const handleOpenSettings = async () => {
     await loadSettings();
@@ -1285,21 +1316,52 @@ export default function AdminPage() {
       <div className="mx-auto max-w-7xl px-4 py-4">
         <Card className="p-4">
           <div className="flex flex-wrap items-center gap-4">
-            <label className="text-sm font-medium text-gray-700">
-              Filter by Recommendation:
-            </label>
-            <select
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              className="rounded-md border border-gray-300 px-3 py-2 text-sm"
-            >
-              <option value="">All</option>
-              {RECOMMENDATIONS.map((rec) => (
-                <option key={rec} value={rec}>
-                  {rec}
-                </option>
-              ))}
-            </select>
+            {/* Search by name */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Search:</label>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Product name..."
+                className="w-48 rounded-md border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+
+            {/* Crawl Job Filter */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Crawl:</label>
+              <select
+                value={crawlJobId}
+                onChange={(e) => setCrawlJobId(e.target.value)}
+                className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="">All Crawls</option>
+                {crawlJobs.map((job) => (
+                  <option key={job.id} value={job.id}>
+                    {job.id} - {job.keywords.join(", ")}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Recommendation Filter */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Status:</label>
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="">All</option>
+                {RECOMMENDATIONS.map((rec) => (
+                  <option key={rec} value={rec}>
+                    {rec}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <span className="text-sm text-gray-500">
               Showing {products.length} of {total} products
             </span>
@@ -1357,11 +1419,10 @@ export default function AdminPage() {
                   <tr>
                     <th className="px-4 py-3">Product</th>
                     <th className="px-4 py-3 text-right">Recommendation</th>
-                    <th className="px-4 py-3 text-right">Rank</th>
                     <th className="px-4 py-3 text-right">Net Margin</th>
                     <th className="px-4 py-3 text-right">Price</th>
                     <th className="px-4 py-3 text-center">Warehouse</th>
-                    <th className="px-4 py-3 text-right">Stock</th>
+                    <th className="px-4 py-3 text-right">Created</th>
                     <th className="px-4 py-3">Actions</th>
                   </tr>
                 </thead>

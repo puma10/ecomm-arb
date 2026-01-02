@@ -37,6 +37,7 @@ from ecom_arb.integrations.serpwatch import (
 )
 from ecom_arb.services.cj_parser import (
     CJParserError,
+    SearchResultsData,
     extract_product_id,
     fetch_and_parse_cj_product,
     generate_search_url,
@@ -222,7 +223,13 @@ async def _update_job_progress(
 
 
 async def _check_job_completion(job_id: str, db: AsyncSession) -> None:
-    """Check if a crawl job is complete and update status if so."""
+    """Check if a crawl job is complete and update status if so.
+
+    Completion requires:
+    - All search pages completed (including dynamically added pages)
+    - All product URLs completed
+    - At least one search completed (to avoid premature completion)
+    """
     result = await db.execute(select(CrawlJob).where(CrawlJob.id == job_id))
     job = result.scalar_one_or_none()
 
@@ -231,14 +238,29 @@ async def _check_job_completion(job_id: str, db: AsyncSession) -> None:
 
     progress = job.progress or {}
 
-    search_done = progress.get("search_urls_completed", 0) >= progress.get(
-        "search_urls_submitted", 1
-    )
-    products_done = progress.get("product_urls_completed", 0) >= progress.get(
-        "product_urls_submitted", 0
+    search_submitted = progress.get("search_urls_submitted", 0)
+    search_completed = progress.get("search_urls_completed", 0)
+    products_submitted = progress.get("product_urls_submitted", 0)
+    products_completed = progress.get("product_urls_completed", 0)
+
+    # Need at least one search completed before checking completion
+    if search_completed == 0:
+        return
+
+    search_done = search_completed >= search_submitted
+    products_done = products_completed >= products_submitted
+
+    # Log progress periodically
+    logger.debug(
+        f"Job {job_id} progress: search {search_completed}/{search_submitted}, "
+        f"products {products_completed}/{products_submitted}"
     )
 
     if search_done and products_done:
+        # Final tally
+        passed = progress.get("products_passed_scoring", 0)
+        scored = progress.get("products_scored", 0)
+
         await db.execute(
             update(CrawlJob)
             .where(CrawlJob.id == job_id)
@@ -247,8 +269,12 @@ async def _check_job_completion(job_id: str, db: AsyncSession) -> None:
                 completed_at=datetime.utcnow(),
             )
         )
-        logger.info(f"Crawl job {job_id} completed")
-        await _add_job_log(job_id, "info", "Crawl completed", db)
+        logger.info(f"Crawl job {job_id} completed: {passed}/{scored} products passed scoring")
+        await _add_job_log(
+            job_id, "info",
+            f"✓ Crawl completed! {passed} products passed scoring out of {scored} scored",
+            db
+        )
 
 
 async def _add_job_log(
@@ -337,19 +363,21 @@ async def start_crawl(
     db.add(job)
     await db.flush()
 
-    # Generate search URLs from keywords
+    # Generate search URLs from keywords (page 1 for each)
     search_urls = []
     for keyword in config.keywords:
-        url = generate_search_url(keyword)
+        url = generate_search_url(keyword, page=1)
         search_urls.append(url)
 
     # Submit search URLs to SerpWatch
+    # Index encoding: keyword_index * 1000 + page_num (page 1 for initial)
     submitted = 0
-    for index, url in enumerate(search_urls):
+    for keyword_index, url in enumerate(search_urls):
         try:
+            index = keyword_index * 1000 + 1  # keyword_index * 1000 + page 1
             await submit_url(url, job_id, "search", index)
             submitted += 1
-            await _add_job_log(job_id, "info", f"Submitted search: {config.keywords[index]}", db)
+            await _add_job_log(job_id, "info", f"Submitted search: {config.keywords[keyword_index]}", db)
         except SerpWatchError as e:
             logger.error(f"Failed to submit search URL {url}: {e}")
             await _add_job_log(job_id, "error", f"Failed to submit search: {e}", db)
@@ -604,15 +632,27 @@ async def _process_search_result(
     """Process search result HTML in background.
 
     Extracts product URLs and submits new ones to SerpWatch.
+    If this is page 1, also submits additional pages for crawling.
+
+    Args:
+        job_id: The crawl job ID
+        html_url: URL to the stored HTML from SerpWatch
+        index: Index encoding keyword_index and page_num as: keyword_index * 1000 + page_num
     """
     from ecom_arb.db.base import async_session_maker
 
+    # Decode index: keyword_index * 1000 + page_num
+    keyword_index = index // 1000
+    page_num = index % 1000
+    if page_num == 0:
+        page_num = 1  # Legacy format compatibility
+
     async with async_session_maker() as db:
         try:
-            # Parse search results
-            product_urls = await parse_cj_search_results(html_url)
-            logger.info(f"Job {job_id}: Found {len(product_urls)} products in search {index}")
-            await _add_job_log(job_id, "info", f"Search completed: found {len(product_urls)} products", db)
+            # Parse search results (now includes pagination info)
+            search_data = await parse_cj_search_results(html_url)
+            product_urls = search_data.product_urls
+            total_pages = search_data.total_pages
 
             # Get job config for filtering
             result = await db.execute(select(CrawlJob).where(CrawlJob.id == job_id))
@@ -620,6 +660,36 @@ async def _process_search_result(
 
             if not job or job.status == CrawlJobStatus.CANCELLED:
                 return
+
+            config = job.config or {}
+            keywords = config.get("keywords", [])
+            keyword = keywords[keyword_index] if keyword_index < len(keywords) else f"search_{keyword_index}"
+
+            logger.info(f"Job {job_id}: Found {len(product_urls)} products in '{keyword}' page {page_num}/{total_pages}")
+            await _add_job_log(
+                job_id, "info",
+                f"Search '{keyword}' page {page_num}: {len(product_urls)} products (total pages: {total_pages})",
+                db
+            )
+
+            # If this is page 1 and there are more pages, submit pages 2-N
+            if page_num == 1 and total_pages > 1:
+                pages_to_submit = min(total_pages, 10)  # Cap at 10 pages per keyword
+                additional_pages = 0
+
+                for page in range(2, pages_to_submit + 1):
+                    try:
+                        page_url = generate_search_url(keyword, page)
+                        # Encode as: keyword_index * 1000 + page_num
+                        page_index = keyword_index * 1000 + page
+                        await submit_url(page_url, job_id, "search", page_index)
+                        additional_pages += 1
+                    except SerpWatchError as e:
+                        logger.error(f"Failed to submit page {page} for '{keyword}': {e}")
+
+                if additional_pages > 0:
+                    await _update_job_progress(job_id, {"+search_urls_submitted": additional_pages}, db)
+                    await _add_job_log(job_id, "info", f"Queued {additional_pages} additional pages for '{keyword}'", db)
 
             # Filter out already-existing products
             new_urls, skipped = await _filter_new_product_urls(product_urls, db)
@@ -652,7 +722,8 @@ async def _process_search_result(
                     logger.error(f"Failed to submit product URL: {e}")
 
             await _update_job_progress(job_id, {"+product_urls_submitted": submitted}, db)
-            await _add_job_log(job_id, "info", f"Queued {submitted} products for fetching", db)
+            if submitted > 0:
+                await _add_job_log(job_id, "info", f"Queued {submitted} products for fetching", db)
 
             # Check if job is complete
             await _check_job_completion(job_id, db)
@@ -662,6 +733,7 @@ async def _process_search_result(
         except CJParserError as e:
             logger.error(f"Job {job_id}: Search parse error: {e}")
             await _update_job_progress(job_id, {"+errors": 1, "+search_urls_completed": 1}, db)
+            await _add_job_log(job_id, "error", f"Search parse error: {str(e)[:50]}", db)
             await db.commit()
         except Exception as e:
             logger.exception(f"Job {job_id}: Unexpected error processing search: {e}")
@@ -779,6 +851,7 @@ async def _process_product_result(
             scored_product = ScoredProduct(
                 source_product_id=product_data.id,
                 name=product_data.name,
+                crawl_job_id=job_id,  # Associate with crawl job
                 source="cj_crawl",
                 source_url=original_url,
                 product_cost=Decimal(str(sell_price)),

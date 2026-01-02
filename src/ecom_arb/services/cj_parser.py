@@ -342,14 +342,66 @@ async def fetch_and_parse_cj_product(html_url: str) -> CJProductData:
     return transform_cj_data(data)
 
 
-def parse_search_results_html(html: str) -> list[str]:
-    """Extract product URLs from CJ search results page HTML.
+@dataclass
+class SearchResultsData:
+    """Parsed search results with pagination info."""
+
+    product_urls: list[str]
+    total_pages: int
+    total_records: int
+
+
+def extract_pagination_info(html: str) -> tuple[int, int]:
+    """Extract pagination info from CJ search results HTML.
+
+    Looks for patterns like:
+    - "219 Records" for total count
+    - "of 4" or "of 12" for total pages
 
     Args:
         html: The HTML content of the search results page
 
     Returns:
-        List of product page URLs
+        Tuple of (total_pages, total_records)
+    """
+    total_pages = 1
+    total_records = 0
+
+    # Pattern for total records: "219 Records"
+    records_match = re.search(r'(\d+)\s*Records', html)
+    if records_match:
+        total_records = int(records_match.group(1))
+
+    # Pattern for total pages: "of 4" or "of 12" in pagination
+    # Look for patterns like: "of 4" or "of&nbsp;4" or ">4</a>" at end of pagination
+    pages_patterns = [
+        r'of\s+(\d+)',  # "of 4"
+        r'of&nbsp;(\d+)',  # "of&nbsp;4"
+        r'pageNum=(\d+)[^>]*>\s*>>\s*</a>',  # Last page link
+    ]
+
+    for pattern in pages_patterns:
+        match = re.search(pattern, html)
+        if match:
+            total_pages = int(match.group(1))
+            break
+
+    # If we have records but couldn't find pages, estimate (CJ shows ~60 per page)
+    if total_records > 0 and total_pages == 1:
+        total_pages = max(1, (total_records + 59) // 60)
+
+    logger.info(f"Pagination: {total_pages} pages, {total_records} records")
+    return total_pages, total_records
+
+
+def parse_search_results_html(html: str) -> SearchResultsData:
+    """Extract product URLs and pagination from CJ search results page HTML.
+
+    Args:
+        html: The HTML content of the search results page
+
+    Returns:
+        SearchResultsData with product URLs and pagination info
     """
     product_urls = []
 
@@ -369,18 +421,25 @@ def parse_search_results_html(html: str) -> list[str]:
             seen.add(full_url)
             product_urls.append(full_url)
 
+    # Extract pagination info
+    total_pages, total_records = extract_pagination_info(html)
+
     logger.info(f"Found {len(product_urls)} unique product URLs in search results")
-    return product_urls
+    return SearchResultsData(
+        product_urls=product_urls,
+        total_pages=total_pages,
+        total_records=total_records,
+    )
 
 
-async def parse_cj_search_results(html_url: str) -> list[str]:
+async def parse_cj_search_results(html_url: str) -> SearchResultsData:
     """Fetch and parse CJ search results page.
 
     Args:
         html_url: URL to the stored HTML (from SerpWatch webhook)
 
     Returns:
-        List of product page URLs found in search results
+        SearchResultsData with product URLs and pagination info
 
     Raises:
         CJParserError: If fetch or parsing fails

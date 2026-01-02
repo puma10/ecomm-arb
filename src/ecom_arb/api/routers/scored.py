@@ -59,6 +59,8 @@ class ScoredProductListItem(BaseModel):
     points: int | None
     rank_score: Decimal | None
     recommendation: str
+    # Association
+    crawl_job_id: str | None
     created_at: datetime
 
     class Config:
@@ -133,29 +135,41 @@ async def list_scored_products(
         None,
         description="Filter by recommendation (STRONG BUY, VIABLE, MARGINAL, WEAK, REJECT)",
     ),
+    crawl_job_id: str | None = Query(
+        None,
+        description="Filter by crawl job ID",
+    ),
+    search: str | None = Query(
+        None,
+        description="Search products by name (case-insensitive)",
+    ),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     db: AsyncSession = Depends(get_db),
 ) -> ScoredProductListResponse:
     """List scored products with optional filtering.
 
-    Results are sorted by rank_score descending (highest ranked first).
+    Results are sorted by created_at descending (most recent first).
     """
-    # Build query
-    query = select(ScoredProduct)
-
-    if recommendation:
-        query = query.where(ScoredProduct.recommendation == recommendation)
+    # Build base query with filters
+    def apply_filters(q):
+        if recommendation:
+            q = q.where(ScoredProduct.recommendation == recommendation)
+        if crawl_job_id:
+            q = q.where(ScoredProduct.crawl_job_id == crawl_job_id)
+        if search:
+            # Case-insensitive search on name
+            q = q.where(ScoredProduct.name.ilike(f"%{search}%"))
+        return q
 
     # Get total count
-    count_query = select(ScoredProduct)
-    if recommendation:
-        count_query = count_query.where(ScoredProduct.recommendation == recommendation)
+    count_query = apply_filters(select(ScoredProduct))
     count_result = await db.execute(count_query)
     total = len(count_result.scalars().all())
 
-    # Get paginated results, sorted by rank_score descending
-    query = query.order_by(desc(ScoredProduct.rank_score))
+    # Get paginated results, sorted by created_at descending (most recent first)
+    query = apply_filters(select(ScoredProduct))
+    query = query.order_by(desc(ScoredProduct.created_at))
     query = query.offset(offset).limit(limit)
 
     result = await db.execute(query)
