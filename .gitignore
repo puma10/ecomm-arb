@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -77,3 +77,6 @@ out/
 next-env.d.ts
 *.mcp.json
 storage.sqlite3*
+
+# bv (beads viewer) local config and caches
+.bv/

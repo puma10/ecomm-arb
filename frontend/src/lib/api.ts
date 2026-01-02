@@ -159,3 +159,217 @@ export async function lookupOrder(
 
   return res.json();
 }
+
+// Admin API - Scored Products
+
+export interface ScoredProduct {
+  id: string;
+  source_product_id: string;
+  source: string;
+  name: string;
+  selling_price: number;
+  category: string;
+  cogs: number;
+  gross_margin: number;
+  net_margin: number;
+  points: number | null;
+  rank_score: number | null;
+  recommendation: string;
+  created_at: string;
+}
+
+export interface ScoredProductListResponse {
+  items: ScoredProduct[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ApproveProductResponse {
+  success: boolean;
+  product_id: string;
+  slug: string;
+  message: string;
+}
+
+export async function getScoredProducts(params?: {
+  recommendation?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ScoredProductListResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.recommendation) searchParams.set("recommendation", params.recommendation);
+  if (params?.limit) searchParams.set("limit", params.limit.toString());
+  if (params?.offset) searchParams.set("offset", params.offset.toString());
+
+  const url = `${API_URL}/products/scored${searchParams.toString() ? `?${searchParams}` : ""}`;
+  const res = await fetch(url, { cache: "no-store" });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch scored products");
+  }
+
+  const data = await res.json();
+  return {
+    ...data,
+    items: data.items.map((item: Record<string, unknown>) => ({
+      ...item,
+      selling_price: Number(item.selling_price),
+      cogs: Number(item.cogs),
+      gross_margin: Number(item.gross_margin),
+      net_margin: Number(item.net_margin),
+      rank_score: item.rank_score ? Number(item.rank_score) : null,
+    })),
+  };
+}
+
+export interface ScoredProductFull extends ScoredProduct {
+  source_url: string | null;
+  product_cost: number;
+  shipping_cost: number;
+  estimated_cpc: number;
+  max_cpc: number;
+  cpc_buffer: number;
+  passed_filters: boolean;
+  rejection_reasons: string[];
+  point_breakdown: Record<string, number> | null;
+  updated_at: string;
+}
+
+export async function getScoredProduct(id: string): Promise<ScoredProductFull> {
+  const res = await fetch(`${API_URL}/products/${id}/score`, { cache: "no-store" });
+
+  if (!res.ok) {
+    throw new Error("Scored product not found");
+  }
+
+  const data = await res.json();
+  return {
+    ...data,
+    product_cost: Number(data.product_cost),
+    shipping_cost: Number(data.shipping_cost),
+    selling_price: Number(data.selling_price),
+    estimated_cpc: Number(data.estimated_cpc),
+    cogs: Number(data.cogs),
+    gross_margin: Number(data.gross_margin),
+    net_margin: Number(data.net_margin),
+    max_cpc: Number(data.max_cpc),
+    cpc_buffer: Number(data.cpc_buffer),
+    rank_score: data.rank_score ? Number(data.rank_score) : null,
+    rejection_reasons: data.rejection_reasons || [],
+    point_breakdown: data.point_breakdown || null,
+  };
+}
+
+export async function approveProduct(
+  id: string,
+  options?: { selling_price?: number; compare_at_price?: number }
+): Promise<ApproveProductResponse> {
+  const res = await fetch(`${API_URL}/products/${id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: options ? JSON.stringify(options) : "{}",
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to approve product");
+  }
+
+  return res.json();
+}
+
+export async function rejectProduct(id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/products/${id}`, {
+    method: "DELETE",
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to reject product");
+  }
+}
+
+// Admin - Discovery
+
+export interface SeedDemoResponse {
+  status: string;
+  message: string;
+  created: number;
+}
+
+export async function seedDemoProducts(count: number = 20): Promise<SeedDemoResponse> {
+  const res = await fetch(`${API_URL}/admin/seed-demo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ count }),
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to seed products");
+  }
+
+  return res.json();
+}
+
+export async function clearScoredProducts(): Promise<void> {
+  const res = await fetch(`${API_URL}/admin/scored-products`, {
+    method: "DELETE",
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to clear products");
+  }
+}
+
+// Admin - Scoring Settings
+
+export interface ScoringSettings {
+  // Fee assumptions
+  payment_fee_rate: number;
+  chargeback_rate: number;
+  default_refund_rate: number;
+  cvr: number;
+  cpc_multiplier: number;
+
+  // Hard filter thresholds
+  max_cpc_threshold: number;
+  min_gross_margin: number;
+  min_selling_price: number;
+  max_selling_price: number;
+  max_shipping_days: number;
+  min_supplier_rating: number;
+  min_supplier_age_months: number;
+  min_supplier_feedback: number;
+  max_amazon_reviews_for_competition: number;
+  min_cpc_buffer: number;
+  max_weight_grams: number;
+}
+
+export async function getScoringSettings(): Promise<ScoringSettings> {
+  const res = await fetch(`${API_URL}/admin/settings`, { cache: "no-store" });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch settings");
+  }
+
+  return res.json();
+}
+
+export async function updateScoringSettings(
+  settings: Partial<ScoringSettings>
+): Promise<ScoringSettings> {
+  const res = await fetch(`${API_URL}/admin/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to update settings");
+  }
+
+  return res.json();
+}

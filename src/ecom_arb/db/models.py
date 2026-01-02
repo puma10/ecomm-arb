@@ -156,6 +156,68 @@ class ScoredProduct(Base):
         return f"<ScoredProduct {self.source_product_id}: {self.recommendation}>"
 
 
+class ScoringSettings(Base):
+    """Scoring configuration settings (singleton table)."""
+
+    __tablename__ = "scoring_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+
+    # Fee assumptions
+    payment_fee_rate: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("0.03")
+    )
+    chargeback_rate: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("0.005")
+    )
+    default_refund_rate: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("0.08")
+    )
+
+    # CVR assumption
+    cvr: Mapped[Decimal] = mapped_column(Numeric(5, 4), default=Decimal("0.01"))
+
+    # CPC multiplier for new accounts
+    cpc_multiplier: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("1.3")
+    )
+
+    # Hard filter thresholds
+    max_cpc_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("0.75")
+    )
+    min_gross_margin: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("0.65")
+    )
+    min_selling_price: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("50.0")
+    )
+    max_selling_price: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("200.0")
+    )
+    max_shipping_days: Mapped[int] = mapped_column(default=30)
+    min_supplier_rating: Mapped[Decimal] = mapped_column(
+        Numeric(3, 2), default=Decimal("4.6")
+    )
+    min_supplier_age_months: Mapped[int] = mapped_column(default=12)
+    min_supplier_feedback: Mapped[int] = mapped_column(default=500)
+    max_amazon_reviews_for_competition: Mapped[int] = mapped_column(default=500)
+    min_cpc_buffer: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("1.5")
+    )
+    max_weight_grams: Mapped[int] = mapped_column(default=2000)
+
+    # Timestamps
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScoringSettings max_cpc={self.max_cpc_threshold}>"
+
+
 class Order(Base):
     """Order model for tracking purchases."""
 

@@ -19,9 +19,19 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ecom_arb.db.base import get_db
-from ecom_arb.db.models import ScoredProduct
+from ecom_arb.db.models import Product, ScoredProduct
 
 router = APIRouter(prefix="/products", tags=["scored"])
+
+
+def slugify(name: str) -> str:
+    """Convert product name to URL-friendly slug."""
+    import re
+    slug = name.lower()
+    slug = re.sub(r'[^a-z0-9\s-]', '', slug)
+    slug = re.sub(r'[\s_]+', '-', slug)
+    slug = re.sub(r'-+', '-', slug)
+    return slug.strip('-')[:100]
 
 
 class ScoredProductListItem(BaseModel):
@@ -33,6 +43,7 @@ class ScoredProductListItem(BaseModel):
     name: str
     selling_price: Decimal
     category: str
+    cogs: Decimal
     gross_margin: Decimal
     net_margin: Decimal
     points: int | None
@@ -236,3 +247,121 @@ async def rescore_product(
     await db.refresh(scored_product)
 
     return scored_product
+
+
+class ApproveProductRequest(BaseModel):
+    """Request to approve a scored product for the storefront."""
+
+    selling_price: Decimal | None = Field(None, description="Override selling price")
+    compare_at_price: Decimal | None = Field(None, description="Compare-at price for discounts")
+
+
+class ApproveProductResponse(BaseModel):
+    """Response after approving a product."""
+
+    success: bool
+    product_id: UUID
+    slug: str
+    message: str
+
+
+@router.post("/{product_id}/approve", response_model=ApproveProductResponse)
+async def approve_product(
+    product_id: UUID,
+    request: ApproveProductRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> ApproveProductResponse:
+    """Approve a scored product and add it to the storefront.
+
+    Creates a new Product from the ScoredProduct data.
+    """
+    # Get the scored product
+    result = await db.execute(
+        select(ScoredProduct).where(ScoredProduct.id == product_id)
+    )
+    scored = result.scalar_one_or_none()
+
+    if not scored:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scored product not found",
+        )
+
+    # Check if already approved (product exists with same source_product_id)
+    existing = await db.execute(
+        select(Product).where(Product.supplier_sku == scored.source_product_id)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Product already approved and in storefront",
+        )
+
+    # Create the storefront product
+    base_slug = slugify(scored.name)
+    slug = base_slug
+
+    # Ensure unique slug
+    counter = 1
+    while True:
+        existing_slug = await db.execute(
+            select(Product).where(Product.slug == slug)
+        )
+        if not existing_slug.scalar_one_or_none():
+            break
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+
+    selling_price = request.selling_price if request and request.selling_price else scored.selling_price
+    compare_at = request.compare_at_price if request else None
+
+    product = Product(
+        slug=slug,
+        name=scored.name,
+        description=f"Quality product sourced from {scored.source}.",
+        price=selling_price,
+        compare_at_price=compare_at,
+        cost=scored.product_cost,
+        images=[],  # Would need to fetch from source
+        supplier_sku=scored.source_product_id,
+        supplier_url=scored.source_url or "",
+        shipping_cost=scored.shipping_cost,
+        shipping_days_min=7,
+        shipping_days_max=14,
+        active=True,
+    )
+
+    db.add(product)
+    await db.flush()
+    await db.refresh(product)
+
+    return ApproveProductResponse(
+        success=True,
+        product_id=product.id,
+        slug=product.slug,
+        message=f"Product approved and added to storefront as '{slug}'",
+    )
+
+
+@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def reject_product(
+    product_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Reject and delete a scored product.
+
+    This removes the product from consideration.
+    """
+    result = await db.execute(
+        select(ScoredProduct).where(ScoredProduct.id == product_id)
+    )
+    scored = result.scalar_one_or_none()
+
+    if not scored:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scored product not found",
+        )
+
+    await db.delete(scored)
+    await db.flush()
