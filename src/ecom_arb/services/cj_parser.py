@@ -312,7 +312,8 @@ def transform_cj_data(data: dict[str, Any]) -> CJProductData:
     """
     # Extract basic info
     product_id = str(data.get("id", data.get("productId", data.get("pid", ""))))
-    name = data.get("name", data.get("productNameEn", data.get("productName", "")))
+    # Prefer English name over Chinese name
+    name = data.get("productNameEn") or data.get("name") or data.get("productName") or ""
     sku = data.get("sku", data.get("productSku", ""))
 
     # Extract pricing - handle None and invalid values
