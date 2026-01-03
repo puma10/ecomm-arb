@@ -987,8 +987,22 @@ function ProductRow({
       onClick={() => onSelect(product.id)}
     >
       <td className="px-4 py-3">
-        <div className="max-w-xs truncate font-medium" title={product.name}>
-          {product.name}
+        <div className="flex items-center gap-2">
+          <div className="max-w-xs truncate font-medium" title={product.name}>
+            {product.name}
+          </div>
+          {product.source_url && (
+            <a
+              href={product.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-blue-500 hover:text-blue-700 flex-shrink-0"
+              title="View on CJ"
+            >
+              ↗
+            </a>
+          )}
         </div>
         <div className="text-xs text-gray-500">{product.category}</div>
       </td>
