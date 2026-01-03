@@ -167,33 +167,58 @@ def _detect_removed_product(html: str) -> bool:
     """Check if the HTML indicates a removed product.
 
     CJ shows "Product removed" message for discontinued products.
+    Only triggers if productDetailData is empty/missing AND removal text is shown.
+
+    Note: "Product removed" appears in i18n translation JSON on ALL pages,
+    so we must check for actual removal indicators, not just the text.
     """
-    removed_patterns = [
-        r"Product removed",
-        r"product.*removed",
-        r"Product.*not.*found",
-        r"Product.*unavailable",
-        r"productDetailData\s*=\s*\{\s*\}",  # Empty productDetailData
+    # Check for empty productDetailData (strongest signal)
+    if re.search(r"productDetailData\s*=\s*\{\s*\}", html):
+        return True
+
+    # Check for visible removal message (with context to avoid i18n matches)
+    # Real removal shows: "Product removed. You may post a sourcing request"
+    removal_with_context = [
+        r"Product removed\.\s*You may",  # Actual removal message
+        r"<[^>]*>Product removed<",  # In HTML element (not JSON)
+        r">\s*Product removed\s*<",  # Between HTML tags
+        r"Product has been removed",
+        r"This product is no longer available",
     ]
-    for pattern in removed_patterns:
+    for pattern in removal_with_context:
         if re.search(pattern, html, re.IGNORECASE):
             return True
+
     return False
 
 
 def _detect_bot_block(html: str) -> bool:
-    """Check if the HTML indicates bot detection or blocking."""
-    block_patterns = [
-        r"captcha",
-        r"verify.*human",
-        r"access.*denied",
-        r"blocked",
-        r"cloudflare",
-        r"security.*check",
-    ]
-    for pattern in block_patterns:
-        if re.search(pattern, html, re.IGNORECASE):
-            return True
+    """Check if the HTML indicates bot detection or blocking.
+
+    Note: Words like "captcha", "cloudflare", "blocked" appear in i18n strings
+    on ALL CJ pages, so we check for actual blocking indicators, not just words.
+    """
+    # Check for actual Cloudflare challenge page (has specific structure)
+    if re.search(r"<title>.*(?:Attention Required|Just a moment).*</title>", html, re.IGNORECASE):
+        return True
+
+    # Check for actual CAPTCHA challenge elements
+    if re.search(r'class="[^"]*captcha[^"]*"', html, re.IGNORECASE):
+        return True
+
+    # Check for Cloudflare challenge form
+    if re.search(r'action=".*cloudflare.*challenge', html, re.IGNORECASE):
+        return True
+
+    # Check for explicit access denied pages
+    if re.search(r"<title>.*Access Denied.*</title>", html, re.IGNORECASE):
+        return True
+
+    # Check for very short pages that are likely error/block pages
+    # Valid CJ product pages are typically > 50KB
+    if len(html) < 5000 and re.search(r"blocked|denied|forbidden", html, re.IGNORECASE):
+        return True
+
     return False
 
 
