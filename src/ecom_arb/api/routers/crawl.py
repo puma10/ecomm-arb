@@ -359,7 +359,8 @@ async def _add_to_queue(
     Returns:
         The queue item ID
     """
-    queue_id = str(uuid.uuid4())[:12]
+    # Use hex without dashes to avoid breaking post_id parsing
+    queue_id = uuid.uuid4().hex[:12]
     queue_item = CrawlQueue(
         id=queue_id,
         job_id=job_id,
@@ -384,7 +385,7 @@ async def _log_crawl_event(
 ) -> None:
     """Log a crawl event for debugging."""
     event = CrawlEvent(
-        id=str(uuid.uuid4())[:12],
+        id=uuid.uuid4().hex[:12],
         job_id=job_id,
         queue_item_id=queue_item_id,
         event_type=event_type,
@@ -603,6 +604,14 @@ async def _submit_next_from_queue(job_id: str, delay: float = 0) -> None:
                         "url_type": queue_item.url_type.value,
                         "retry_count": queue_item.retry_count,
                     },
+                )
+
+                # Also log to job logs for UI
+                keyword_display = queue_item.keyword or queue_item.url_type.value
+                await _add_job_log(
+                    job_id, "info",
+                    f"Submitted {queue_item.url_type.value}: {keyword_display} (delay={delay:.1f}s)",
+                    db,
                 )
 
                 logger.info(f"Job {job_id}: Submitted {queue_item.url_type.value} URL (delay={delay:.1f}s)")
@@ -916,6 +925,13 @@ async def crawl_webhook(
             keyword=queue_item.keyword,
             details={"success": result.success, "error": result.error},
         )
+
+        # Log to job logs for UI
+        keyword_display = queue_item.keyword or queue_item.url_type.value
+        if result.success:
+            await _add_job_log(job_id, "info", f"Received: {keyword_display}", db)
+        else:
+            await _add_job_log(job_id, "warn", f"Failed: {keyword_display} - {result.error}", db)
 
         # Handle failed result
         if not result.success or not result.html_url:
