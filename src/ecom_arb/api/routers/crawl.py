@@ -608,17 +608,11 @@ async def _submit_next_from_queue(job_id: str, delay: float = 0) -> None:
                 return
 
             # Submit to SerpWatch
+            # Note: Don't pre-resolve redirects - CJ blocks non-browser requests with validation page.
+            # SerpWatch's browser will follow the 301 redirect natively.
             try:
-                # For product URLs, resolve redirects first (CJ uses 301 redirects)
-                url_to_submit = queue_item.url
-                if queue_item.url_type == CrawlQueueUrlType.PRODUCT:
-                    resolved_url = await _resolve_cj_redirect(queue_item.url)
-                    if resolved_url and resolved_url != queue_item.url:
-                        url_to_submit = resolved_url
-                        logger.debug(f"Resolved redirect: {queue_item.url} -> {resolved_url}")
-
                 await submit_url(
-                    url_to_submit,
+                    queue_item.url,
                     job_id,
                     queue_item.url_type.value,
                     queue_item.id,  # Use queue ID as index
