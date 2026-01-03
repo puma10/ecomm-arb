@@ -55,3 +55,33 @@ E-commerce Arbitrage project. This is a **greenfield project** with no existing 
 - Commit `.beads/` with every code change
 - Run `ubs .` before commits
 - Run `/calibrate` between phases
+
+## CJ Crawl System Requirements
+
+**CRITICAL: ngrok must be running for crawls to work.**
+
+The crawl system uses SerpWatch to fetch CJ Dropshipping pages. SerpWatch sends results back via webhook, which requires a public URL.
+
+### Before Starting Crawls
+
+1. **Start ngrok** on port 8000:
+   ```bash
+   ngrok http 8000
+   ```
+
+2. **Update `.env`** with the ngrok URL:
+   ```
+   WEBHOOK_BASE_URL=https://xxxx-xxxx.ngrok-free.app
+   ```
+
+3. **Restart the API server** to pick up the new URL
+
+### Crawl Flow
+```
+1. API submits URL to SerpWatch
+2. SerpWatch fetches page with real browser
+3. SerpWatch POSTs HTML to WEBHOOK_BASE_URL/api/crawl/webhook
+4. API parses HTML and stores product data
+```
+
+**If crawls are stuck at "0/1 Searches"**: ngrok is not running or WEBHOOK_BASE_URL is wrong.

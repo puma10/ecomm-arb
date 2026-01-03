@@ -650,6 +650,34 @@ release_file_reservations(...)     # If multi-agent
 
 ---
 
+## CJ Crawl System Requirements
+
+**CRITICAL: ngrok must be running for crawls to work.**
+
+The crawl system uses SerpWatch to fetch CJ Dropshipping pages. SerpWatch sends results back via webhook, which requires a public URL.
+
+### Before Starting Crawls
+
+```bash
+# 1. Start ngrok on port 8000
+ngrok http 8000
+
+# 2. Get the public URL (copy from ngrok output or):
+curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url'
+
+# 3. Update .env with the URL
+echo "WEBHOOK_BASE_URL=https://xxxx-xxxx.ngrok-free.app" >> .env
+
+# 4. Restart the API server
+```
+
+**Symptoms of missing ngrok:**
+- Crawls stuck at "0/1 Searches" or "Searches: 0/N"
+- No product URLs being found
+- Jobs stay in RUNNING state indefinitely
+
+---
+
 ## Contribution Policy
 
 <!-- CUSTOMIZE as needed -->
