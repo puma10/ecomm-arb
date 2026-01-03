@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select, update
@@ -523,6 +524,29 @@ async def _check_queue_completion(job_id: str, db: AsyncSession) -> None:
         )
 
 
+async def _resolve_cj_redirect(url: str) -> str | None:
+    """Resolve CJ product URL redirects.
+
+    CJ product URLs like /product/-p-{id}.html redirect to /product/{name}-p-{id}.html.
+    We need to follow the redirect to get the actual page URL.
+
+    Args:
+        url: CJ product URL
+
+    Returns:
+        Resolved URL or None if resolution failed
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            # Use HEAD request to just get the final URL without downloading content
+            response = await client.head(url)
+            final_url = str(response.url)
+            return final_url
+    except Exception as e:
+        logger.warning(f"Failed to resolve redirect for {url}: {e}")
+        return None
+
+
 async def _submit_next_from_queue(job_id: str, delay: float = 0) -> None:
     """Submit the next URL from the queue with delay.
 
@@ -585,8 +609,16 @@ async def _submit_next_from_queue(job_id: str, delay: float = 0) -> None:
 
             # Submit to SerpWatch
             try:
+                # For product URLs, resolve redirects first (CJ uses 301 redirects)
+                url_to_submit = queue_item.url
+                if queue_item.url_type == CrawlQueueUrlType.PRODUCT:
+                    resolved_url = await _resolve_cj_redirect(queue_item.url)
+                    if resolved_url and resolved_url != queue_item.url:
+                        url_to_submit = resolved_url
+                        logger.debug(f"Resolved redirect: {queue_item.url} -> {resolved_url}")
+
                 await submit_url(
-                    queue_item.url,
+                    url_to_submit,
                     job_id,
                     queue_item.url_type.value,
                     queue_item.id,  # Use queue ID as index
@@ -614,6 +646,8 @@ async def _submit_next_from_queue(job_id: str, delay: float = 0) -> None:
                     db,
                 )
 
+                # Log to terminal
+                print(f">>> SUBMITTED: {keyword_display} (delay={delay:.1f}s)", flush=True)
                 logger.info(f"Job {job_id}: Submitted {queue_item.url_type.value} URL (delay={delay:.1f}s)")
 
             except SerpWatchError as e:
@@ -929,8 +963,10 @@ async def crawl_webhook(
         # Log to job logs for UI
         keyword_display = queue_item.keyword or queue_item.url_type.value
         if result.success:
+            print(f">>> WEBHOOK OK: {keyword_display}", flush=True)
             await _add_job_log(job_id, "info", f"Received: {keyword_display}", db)
         else:
+            print(f">>> WEBHOOK FAIL: {keyword_display} - {result.error}", flush=True)
             await _add_job_log(job_id, "warn", f"Failed: {keyword_display} - {result.error}", db)
 
         # Handle failed result

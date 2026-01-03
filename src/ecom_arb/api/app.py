@@ -1,13 +1,22 @@
 """FastAPI application."""
 
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging to stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
 logging.getLogger("ecom_arb").setLevel(logging.DEBUG)
+# Quiet noisy loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 from fastapi.middleware.cors import CORSMiddleware
 
 from ecom_arb.api.routers import admin, checkout, crawl, exclusions, orders, products, scored
