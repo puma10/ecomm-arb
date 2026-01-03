@@ -241,6 +241,23 @@ class CrawlJobStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class CrawlQueueStatus(str, enum.Enum):
+    """Crawl queue item status enumeration."""
+
+    PENDING = "pending"
+    SUBMITTED = "submitted"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class CrawlQueueUrlType(str, enum.Enum):
+    """Type of URL in the crawl queue."""
+
+    SEARCH = "search"
+    PAGINATION = "pagination"
+    PRODUCT = "product"
+
+
 class CrawlJob(Base):
     """Crawl job model for tracking SerpWatch crawl operations."""
 
@@ -298,6 +315,73 @@ class CrawlJob(Base):
 
     def __repr__(self) -> str:
         return f"<CrawlJob {self.id}: {self.status.value}>"
+
+
+class CrawlQueue(Base):
+    """Queue item for crawl URLs with retry support."""
+
+    __tablename__ = "crawl_queue"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(50), ForeignKey("crawl_jobs.id"), index=True)
+
+    # URL info
+    url: Mapped[str] = mapped_column(String(2000))
+    url_type: Mapped[CrawlQueueUrlType] = mapped_column(Enum(CrawlQueueUrlType))
+    keyword: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Priority (1=pagination/search, 2=product)
+    priority: Mapped[int] = mapped_column(default=2)
+
+    # Status tracking
+    status: Mapped[CrawlQueueStatus] = mapped_column(
+        Enum(CrawlQueueStatus),
+        default=CrawlQueueStatus.PENDING,
+        index=True,
+    )
+    retry_count: Mapped[int] = mapped_column(default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<CrawlQueue {self.id}: {self.url_type.value} - {self.status.value}>"
+
+
+class CrawlEvent(Base):
+    """Event log for crawl debugging and observability."""
+
+    __tablename__ = "crawl_events"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(50), ForeignKey("crawl_jobs.id"), index=True)
+    queue_item_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Event info
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    # Types: submit, webhook, parse_ok, parse_fail, block, retry, complete, fail
+    url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    keyword: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Flexible metadata
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    # Timestamp
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<CrawlEvent {self.event_type} @ {self.created_at}>"
 
 
 class ExclusionRule(Base):

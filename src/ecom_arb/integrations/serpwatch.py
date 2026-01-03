@@ -145,14 +145,14 @@ async def submit_urls_batch(
     return results
 
 
-def parse_post_id(post_id: str) -> tuple[str, str, int] | None:
+def parse_post_id(post_id: str) -> tuple[str, str, str] | None:
     """Parse a post_id to extract crawl job info.
 
     Args:
-        post_id: The post_id from SerpWatch webhook (format: crawl-{job_id}-{type}-{index})
+        post_id: The post_id from SerpWatch webhook (format: crawl-{job_id}-{type}-{queue_item_id})
 
     Returns:
-        Tuple of (job_id, url_type, index) or None if invalid format
+        Tuple of (job_id, url_type, queue_item_id) or None if invalid format
     """
     if not post_id or not post_id.startswith("crawl-"):
         return None
@@ -162,13 +162,13 @@ def parse_post_id(post_id: str) -> tuple[str, str, int] | None:
         return None
 
     try:
-        # Format: crawl-{job_id}-{type}-{index}
+        # Format: crawl-{job_id}-{type}-{queue_item_id}
         # Job ID might contain dashes, so we need to be careful
-        # The last two parts are type and index
+        # The last two parts are type and queue_item_id
         url_type = parts[-2]
-        index = int(parts[-1])
+        queue_item_id = parts[-1]  # Now a string, not int
         job_id = "-".join(parts[1:-2])
-        return (job_id, url_type, index)
+        return (job_id, url_type, queue_item_id)
     except (ValueError, IndexError):
         return None
 

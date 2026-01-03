@@ -3,29 +3,43 @@
 Manages crawl jobs that use SerpWatch Browser API to scrape CJ Dropshipping
 at scale, processing results through webhooks.
 
+Architecture:
+- Queue-based URL processing with delays for anti-bot resilience
+- Webhook-driven processing with delayed background submissions
+- Retry logic with jittered exponential backoff
+
 Endpoints:
 - POST /crawl/start - Start a new crawl job
 - GET /crawl/{job_id} - Get crawl job status and progress
 - GET /crawl/jobs - List recent crawl jobs
 - POST /crawl/webhook - Receive SerpWatch postback (webhook)
 - DELETE /crawl/{job_id} - Cancel a crawl job
+- GET /crawl/{job_id}/events - Get crawl events for debugging
+- GET /crawl/{job_id}/timeline - Get submission timeline
 """
 
+import asyncio
 import logging
+import os
+import random
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ecom_arb.db.base import get_db
 from ecom_arb.db.models import (
+    CrawlEvent,
     CrawlJob,
     CrawlJobStatus,
+    CrawlQueue,
+    CrawlQueueStatus,
+    CrawlQueueUrlType,
     ExclusionRule,
     ScoredProduct,
 )
@@ -44,6 +58,17 @@ from ecom_arb.services.cj_parser import (
     generate_search_url,
     parse_cj_search_results,
 )
+
+# Queue configuration
+QUEUE_MIN_THRESHOLD = 15  # Min items before starting submissions
+SUBMISSION_DELAY_MIN = 5.0  # Min seconds between submissions
+SUBMISSION_DELAY_MAX = 15.0  # Max seconds between submissions
+RETRY_BASE_DELAY = 15 * 60  # 15 minutes base for retry
+RETRY_JITTER_MAX = 5 * 60  # 0-5 minutes jitter
+MAX_RETRIES = 3
+
+# Debug directory for blocked HTML
+BLOCKED_HTML_DIR = "data/debug/blocked_html"
 
 logger = logging.getLogger(__name__)
 
@@ -318,17 +343,300 @@ async def _add_job_log(
     )
 
 
+# --- Queue Helper Functions ---
+
+
+async def _add_to_queue(
+    job_id: str,
+    url: str,
+    url_type: CrawlQueueUrlType,
+    keyword: str | None,
+    db: AsyncSession,
+    priority: int = 2,
+) -> str:
+    """Add a URL to the crawl queue.
+
+    Returns:
+        The queue item ID
+    """
+    queue_id = str(uuid.uuid4())[:12]
+    queue_item = CrawlQueue(
+        id=queue_id,
+        job_id=job_id,
+        url=url,
+        url_type=url_type,
+        keyword=keyword,
+        priority=priority,
+        status=CrawlQueueStatus.PENDING,
+    )
+    db.add(queue_item)
+    return queue_id
+
+
+async def _log_crawl_event(
+    job_id: str,
+    event_type: str,
+    db: AsyncSession,
+    queue_item_id: str | None = None,
+    url: str | None = None,
+    keyword: str | None = None,
+    details: dict | None = None,
+) -> None:
+    """Log a crawl event for debugging."""
+    event = CrawlEvent(
+        id=str(uuid.uuid4())[:12],
+        job_id=job_id,
+        queue_item_id=queue_item_id,
+        event_type=event_type,
+        url=url,
+        keyword=keyword,
+        details=details or {},
+    )
+    db.add(event)
+
+
+async def _get_queue_stats(job_id: str, db: AsyncSession) -> dict[str, int]:
+    """Get queue statistics for a job."""
+    result = await db.execute(
+        select(CrawlQueue.status, func.count(CrawlQueue.id))
+        .where(CrawlQueue.job_id == job_id)
+        .group_by(CrawlQueue.status)
+    )
+    stats = {row[0].value: row[1] for row in result.fetchall()}
+    return {
+        "pending": stats.get("pending", 0),
+        "submitted": stats.get("submitted", 0),
+        "completed": stats.get("completed", 0),
+        "failed": stats.get("failed", 0),
+    }
+
+
+async def _get_pending_count(job_id: str, db: AsyncSession) -> int:
+    """Get count of pending queue items ready to submit."""
+    result = await db.execute(
+        select(func.count(CrawlQueue.id))
+        .where(CrawlQueue.job_id == job_id)
+        .where(CrawlQueue.status == CrawlQueueStatus.PENDING)
+        .where(
+            (CrawlQueue.next_attempt_at.is_(None)) |
+            (CrawlQueue.next_attempt_at <= datetime.utcnow())
+        )
+    )
+    return result.scalar() or 0
+
+
+async def _handle_queue_failure(
+    queue_item: CrawlQueue,
+    error_message: str,
+    db: AsyncSession,
+) -> None:
+    """Handle a queue item failure with retry logic."""
+    queue_item.retry_count += 1
+    queue_item.error_message = error_message
+
+    if queue_item.retry_count > MAX_RETRIES:
+        # Max retries exceeded - give up
+        queue_item.status = CrawlQueueStatus.FAILED
+        queue_item.completed_at = datetime.utcnow()
+        logger.warning(f"Queue item {queue_item.id} failed after {MAX_RETRIES} retries: {error_message}")
+
+        await _log_crawl_event(
+            queue_item.job_id, "fail", db,
+            queue_item_id=queue_item.id,
+            url=queue_item.url,
+            keyword=queue_item.keyword,
+            details={"total_retries": queue_item.retry_count, "last_error": error_message},
+        )
+    else:
+        # Schedule retry with jittered exponential backoff
+        jitter = random.uniform(0, RETRY_JITTER_MAX)
+        delay_seconds = RETRY_BASE_DELAY * (2 ** (queue_item.retry_count - 1)) + jitter
+
+        queue_item.status = CrawlQueueStatus.PENDING
+        queue_item.next_attempt_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
+
+        logger.info(
+            f"Queue item {queue_item.id} retry {queue_item.retry_count}, "
+            f"next attempt in {delay_seconds/60:.1f} minutes"
+        )
+
+        await _log_crawl_event(
+            queue_item.job_id, "retry", db,
+            queue_item_id=queue_item.id,
+            url=queue_item.url,
+            keyword=queue_item.keyword,
+            details={
+                "retry_count": queue_item.retry_count,
+                "next_attempt_at": queue_item.next_attempt_at.isoformat(),
+                "delay_minutes": delay_seconds / 60,
+            },
+        )
+
+
+def _save_blocked_html(job_id: str, queue_item_id: str, html: str, reason: str) -> str | None:
+    """Save blocked page HTML for debugging. Returns filepath or None."""
+    try:
+        os.makedirs(BLOCKED_HTML_DIR, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_{job_id}_{queue_item_id}.html"
+        filepath = os.path.join(BLOCKED_HTML_DIR, filename)
+
+        with open(filepath, "w") as f:
+            f.write(f"<!-- BLOCKED: {reason} -->\n")
+            f.write(f"<!-- Job: {job_id}, Queue Item: {queue_item_id} -->\n")
+            f.write(f"<!-- Timestamp: {timestamp} -->\n\n")
+            f.write(html)
+
+        logger.info(f"Saved blocked HTML to {filepath}")
+        return filepath
+    except Exception as e:
+        logger.error(f"Failed to save blocked HTML: {e}")
+        return None
+
+
+async def _check_queue_completion(job_id: str, db: AsyncSession) -> None:
+    """Check if a crawl job is complete based on queue state."""
+    stats = await _get_queue_stats(job_id, db)
+
+    pending = stats.get("pending", 0)
+    submitted = stats.get("submitted", 0)
+
+    if pending == 0 and submitted == 0:
+        # All items completed or failed
+        completed = stats.get("completed", 0)
+        failed = stats.get("failed", 0)
+
+        await db.execute(
+            update(CrawlJob)
+            .where(CrawlJob.id == job_id)
+            .values(
+                status=CrawlJobStatus.COMPLETED,
+                completed_at=datetime.utcnow(),
+            )
+        )
+        logger.info(f"Crawl job {job_id} complete: {completed} succeeded, {failed} failed")
+        await _add_job_log(
+            job_id, "info",
+            f"✓ Crawl completed! {completed} URLs processed, {failed} failed",
+            db,
+        )
+
+
+async def _submit_next_from_queue(job_id: str, delay: float = 0) -> None:
+    """Submit the next URL from the queue with delay.
+
+    This is a background task that:
+    1. Waits for the specified delay
+    2. Gets the next ready URL from queue (priority-sorted, randomized)
+    3. Submits to SerpWatch
+    4. Schedules itself again if more items pending
+    """
+    from ecom_arb.db.base import async_session_maker
+
+    # Wait for delay
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+    async with async_session_maker() as db:
+        try:
+            # Check if job is still running
+            job_result = await db.execute(select(CrawlJob).where(CrawlJob.id == job_id))
+            job = job_result.scalar_one_or_none()
+
+            if not job or job.status != CrawlJobStatus.RUNNING:
+                logger.debug(f"Job {job_id} not running, stopping queue submission")
+                return
+
+            # Get next ready URL (priority-sorted, then random)
+            # Priority 1 = search/pagination, Priority 2 = product
+            result = await db.execute(
+                select(CrawlQueue)
+                .where(CrawlQueue.job_id == job_id)
+                .where(CrawlQueue.status == CrawlQueueStatus.PENDING)
+                .where(
+                    (CrawlQueue.next_attempt_at.is_(None)) |
+                    (CrawlQueue.next_attempt_at <= datetime.utcnow())
+                )
+                .order_by(CrawlQueue.priority.asc(), func.random())
+                .limit(1)
+            )
+            queue_item = result.scalar_one_or_none()
+
+            if not queue_item:
+                # No ready items - check if any are waiting for retry
+                retry_result = await db.execute(
+                    select(func.count(CrawlQueue.id))
+                    .where(CrawlQueue.job_id == job_id)
+                    .where(CrawlQueue.status == CrawlQueueStatus.PENDING)
+                    .where(CrawlQueue.next_attempt_at > datetime.utcnow())
+                )
+                waiting_for_retry = retry_result.scalar() or 0
+
+                if waiting_for_retry > 0:
+                    # Schedule check again in 1 minute
+                    logger.debug(f"Job {job_id}: {waiting_for_retry} items waiting for retry")
+                    asyncio.create_task(_submit_next_from_queue(job_id, delay=60))
+                else:
+                    # Check completion
+                    await _check_queue_completion(job_id, db)
+                    await db.commit()
+                return
+
+            # Submit to SerpWatch
+            try:
+                await submit_url(
+                    queue_item.url,
+                    job_id,
+                    queue_item.url_type.value,
+                    queue_item.id,  # Use queue ID as index
+                )
+                queue_item.status = CrawlQueueStatus.SUBMITTED
+                queue_item.submitted_at = datetime.utcnow()
+
+                await _log_crawl_event(
+                    job_id, "submit", db,
+                    queue_item_id=queue_item.id,
+                    url=queue_item.url,
+                    keyword=queue_item.keyword,
+                    details={
+                        "delay_seconds": delay,
+                        "url_type": queue_item.url_type.value,
+                        "retry_count": queue_item.retry_count,
+                    },
+                )
+
+                logger.info(f"Job {job_id}: Submitted {queue_item.url_type.value} URL (delay={delay:.1f}s)")
+
+            except SerpWatchError as e:
+                logger.error(f"Job {job_id}: Failed to submit URL: {e}")
+                await _handle_queue_failure(queue_item, str(e), db)
+
+            await db.commit()
+
+            # Schedule next submission with random delay
+            pending_count = await _get_pending_count(job_id, db)
+            if pending_count > 0:
+                next_delay = random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=next_delay))
+
+        except Exception as e:
+            logger.exception(f"Job {job_id}: Error in queue submission: {e}")
+            await db.rollback()
+
+
 # --- Endpoints ---
 
 
 @router.post("/start", response_model=StartCrawlResponse)
 async def start_crawl(
     config: CrawlConfig,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> StartCrawlResponse:
     """Start a new crawl job.
 
-    Creates a crawl job and submits search URLs to SerpWatch for fetching.
+    Creates a crawl job and queues search URLs for fetching.
+    URLs are submitted to SerpWatch with delays for anti-bot resilience.
     Results will be received via the webhook endpoint.
     """
     # Generate job ID
@@ -351,7 +659,7 @@ async def start_crawl(
     initial_logs = [{
         "ts": datetime.utcnow().isoformat(),
         "level": "info",
-        "msg": f"Starting crawl for keywords: {', '.join(config.keywords)}",
+        "msg": f"Starting crawl for keywords: {', '.join(config.keywords)} (queue-based)",
     }]
 
     job = CrawlJob(
@@ -364,49 +672,49 @@ async def start_crawl(
     db.add(job)
     await db.flush()
 
-    # Generate search URLs from keywords (page 1 for each)
-    search_urls = []
+    # Add search URLs to queue (priority 1 for searches)
+    queued = 0
     for keyword in config.keywords:
         url = generate_search_url(keyword, page=1)
-        search_urls.append(url)
+        await _add_to_queue(
+            job_id=job_id,
+            url=url,
+            url_type=CrawlQueueUrlType.SEARCH,
+            keyword=keyword,
+            db=db,
+            priority=1,  # High priority for searches
+        )
+        queued += 1
+        await _add_job_log(job_id, "info", f"Queued search: {keyword}", db)
 
-    # Submit search URLs to SerpWatch
-    # Index encoding: keyword_index * 1000 + page_num (page 1 for initial)
-    submitted = 0
-    for keyword_index, url in enumerate(search_urls):
-        try:
-            index = keyword_index * 1000 + 1  # keyword_index * 1000 + page 1
-            await submit_url(url, job_id, "search", index)
-            submitted += 1
-            await _add_job_log(job_id, "info", f"Submitted search: {config.keywords[keyword_index]}", db)
-        except SerpWatchError as e:
-            logger.error(f"Failed to submit search URL {url}: {e}")
-            await _add_job_log(job_id, "error", f"Failed to submit search: {e}", db)
-
-    if submitted == 0:
-        # All submissions failed
+    if queued == 0:
         job.status = CrawlJobStatus.FAILED
-        job.error_message = "Failed to submit any search URLs to SerpWatch"
+        job.error_message = "No keywords provided"
         await db.flush()
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to submit search URLs to SerpWatch",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No keywords provided",
         )
 
     # Update job status
     job.status = CrawlJobStatus.RUNNING
     job.started_at = datetime.utcnow()
-    job.progress = {
-        **_get_default_progress(),
-        "search_urls_submitted": submitted,
-    }
     await db.flush()
+
+    # Kickstart: schedule first submission immediately
+    asyncio.create_task(_submit_next_from_queue(job_id, delay=0))
+
+    await _add_job_log(
+        job_id, "info",
+        f"Queued {queued} searches. Starting submissions with {SUBMISSION_DELAY_MIN}-{SUBMISSION_DELAY_MAX}s delays.",
+        db,
+    )
 
     return StartCrawlResponse(
         job_id=job_id,
         status="running",
-        message=f"Started crawl job with {submitted} search URLs",
-        search_urls_submitted=submitted,
+        message=f"Started crawl job with {queued} search URLs queued",
+        search_urls_submitted=queued,
     )
 
 
@@ -547,8 +855,9 @@ async def crawl_webhook(
     """Receive SerpWatch postback with scraped HTML.
 
     This endpoint processes results from SerpWatch:
-    - For search results: extracts product URLs and submits them for fetching
+    - For search results: extracts product URLs and adds them to queue
     - For product pages: parses product data, filters, scores, and stores
+    - Updates queue item status and schedules next submission
 
     Must respond quickly (< 5s) to avoid SerpWatch timeouts.
     Heavy processing is done in background tasks.
@@ -565,19 +874,25 @@ async def crawl_webhook(
     errors = 0
 
     for result in results:
-        if not result.success or not result.html_url:
-            logger.warning(f"Skipping failed result: {result.error}")
-            errors += 1
-            continue
-
-        # Parse post_id to get job info
+        # Parse post_id to get job info and queue_item_id
         parsed = parse_post_id(result.post_id)
         if not parsed:
             logger.warning(f"Invalid post_id format: {result.post_id}")
             errors += 1
             continue
 
-        job_id, url_type, index = parsed
+        job_id, url_type, queue_item_id = parsed
+
+        # Look up queue item
+        queue_result = await db.execute(
+            select(CrawlQueue).where(CrawlQueue.id == queue_item_id)
+        )
+        queue_item = queue_result.scalar_one_or_none()
+
+        if not queue_item:
+            logger.warning(f"Queue item {queue_item_id} not found")
+            errors += 1
+            continue
 
         # Check if job exists and is running
         job_result = await db.execute(select(CrawlJob).where(CrawlJob.id == job_id))
@@ -589,27 +904,48 @@ async def crawl_webhook(
 
         if job.status == CrawlJobStatus.CANCELLED:
             logger.info(f"Job {job_id} was cancelled, skipping result")
+            queue_item.status = CrawlQueueStatus.FAILED
+            queue_item.error_message = "Job cancelled"
+            continue
+
+        # Log webhook receipt
+        await _log_crawl_event(
+            job_id, "webhook", db,
+            queue_item_id=queue_item_id,
+            url=queue_item.url,
+            keyword=queue_item.keyword,
+            details={"success": result.success, "error": result.error},
+        )
+
+        # Handle failed result
+        if not result.success or not result.html_url:
+            logger.warning(f"Failed result for {queue_item_id}: {result.error}")
+            await _handle_queue_failure(queue_item, result.error or "Unknown error", db)
+            errors += 1
+            await db.commit()
+            # Schedule next submission
+            asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
             continue
 
         # Process based on URL type
-        if url_type == "search":
+        if url_type in ("search", "pagination"):
             # Schedule search processing in background
             background_tasks.add_task(
-                _process_search_result,
+                _process_search_result_queued,
                 job_id=job_id,
+                queue_item_id=queue_item_id,
                 html_url=result.html_url,
-                index=index,
             )
             processed += 1
 
         elif url_type == "product":
             # Schedule product processing in background
             background_tasks.add_task(
-                _process_product_result,
+                _process_product_result_queued,
                 job_id=job_id,
+                queue_item_id=queue_item_id,
                 html_url=result.html_url,
                 original_url=result.url,
-                index=index,
             )
             processed += 1
 
@@ -1005,3 +1341,471 @@ def _map_category(categories: list[str]) -> "ProductCategory":
         return ProductCategory.HOME_DECOR
     else:
         return ProductCategory.HOME_DECOR
+
+
+# --- Queue-Aware Background Task Functions ---
+
+
+async def _process_search_result_queued(
+    job_id: str,
+    queue_item_id: str,
+    html_url: str,
+) -> None:
+    """Process search result HTML with queue-based workflow.
+
+    Extracts product URLs and adds them to queue with delays.
+    Also queues additional pagination pages if found.
+    """
+    from ecom_arb.db.base import async_session_maker
+
+    async with async_session_maker() as db:
+        try:
+            # Get the queue item
+            result = await db.execute(
+                select(CrawlQueue).where(CrawlQueue.id == queue_item_id)
+            )
+            queue_item = result.scalar_one_or_none()
+
+            if not queue_item:
+                logger.warning(f"Queue item {queue_item_id} not found")
+                return
+
+            # Parse search results
+            search_data = await parse_cj_search_results(html_url)
+            product_urls = search_data.product_urls
+            total_pages = search_data.total_pages
+
+            # Get job config
+            job_result = await db.execute(select(CrawlJob).where(CrawlJob.id == job_id))
+            job = job_result.scalar_one_or_none()
+
+            if not job or job.status == CrawlJobStatus.CANCELLED:
+                queue_item.status = CrawlQueueStatus.FAILED
+                queue_item.error_message = "Job cancelled or not found"
+                await db.commit()
+                return
+
+            keyword = queue_item.keyword or "unknown"
+
+            logger.info(f"Job {job_id}: Found {len(product_urls)} products in '{keyword}' (total pages: {total_pages})")
+            await _add_job_log(
+                job_id, "info",
+                f"Search '{keyword}': {len(product_urls)} products found (total pages: {total_pages})",
+                db
+            )
+
+            # Mark this queue item as completed
+            queue_item.status = CrawlQueueStatus.COMPLETED
+            queue_item.completed_at = datetime.utcnow()
+
+            await _log_crawl_event(
+                job_id, "parse_ok", db,
+                queue_item_id=queue_item_id,
+                url=queue_item.url,
+                keyword=keyword,
+                details={"products_found": len(product_urls), "total_pages": total_pages},
+            )
+
+            # If this is a search (not pagination) and there are more pages, queue pagination
+            if queue_item.url_type == CrawlQueueUrlType.SEARCH and total_pages > 1:
+                pages_to_queue = min(total_pages, 10)  # Cap at 10 pages
+                pagination_queued = 0
+
+                for page in range(2, pages_to_queue + 1):
+                    page_url = generate_search_url(keyword, page)
+                    await _add_to_queue(
+                        job_id=job_id,
+                        url=page_url,
+                        url_type=CrawlQueueUrlType.PAGINATION,
+                        keyword=keyword,
+                        db=db,
+                        priority=1,  # High priority for pagination
+                    )
+                    pagination_queued += 1
+
+                if pagination_queued > 0:
+                    await _add_job_log(job_id, "info", f"Queued {pagination_queued} additional pages for '{keyword}'", db)
+
+            # Filter out already-existing products
+            new_urls, skipped = await _filter_new_product_urls(product_urls, db)
+            logger.info(f"Job {job_id}: {len(new_urls)} new URLs ({skipped} skipped - already in DB)")
+            if skipped > 0:
+                await _add_job_log(job_id, "info", f"Skipped {skipped} existing products", db)
+
+            # Add new product URLs to queue (priority 2 for products)
+            products_queued = 0
+            for url in new_urls:
+                await _add_to_queue(
+                    job_id=job_id,
+                    url=url,
+                    url_type=CrawlQueueUrlType.PRODUCT,
+                    keyword=keyword,
+                    db=db,
+                    priority=2,
+                )
+                products_queued += 1
+
+            if products_queued > 0:
+                await _add_job_log(job_id, "info", f"Queued {products_queued} products for fetching", db)
+
+            await db.commit()
+
+            # Check if we should start submissions (threshold met or search completed)
+            pending_count = await _get_pending_count(job_id, db)
+            if pending_count > 0:
+                # Start or continue the submission chain
+                delay = random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=delay))
+
+            # Check if job is complete
+            await _check_queue_completion(job_id, db)
+
+        except CJParserError as e:
+            logger.error(f"Job {job_id}: Search parse error: {e}")
+            async with async_session_maker() as db:
+                queue_result = await db.execute(
+                    select(CrawlQueue).where(CrawlQueue.id == queue_item_id)
+                )
+                queue_item = queue_result.scalar_one_or_none()
+                if queue_item:
+                    await _handle_queue_failure(queue_item, str(e), db)
+                await _add_job_log(job_id, "error", f"Search parse error: {str(e)[:50]}", db)
+                await db.commit()
+                # Schedule next
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
+
+        except Exception as e:
+            logger.exception(f"Job {job_id}: Unexpected error processing search: {e}")
+            async with async_session_maker() as db:
+                queue_result = await db.execute(
+                    select(CrawlQueue).where(CrawlQueue.id == queue_item_id)
+                )
+                queue_item = queue_result.scalar_one_or_none()
+                if queue_item:
+                    await _handle_queue_failure(queue_item, str(e), db)
+                await db.commit()
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
+
+
+async def _process_product_result_queued(
+    job_id: str,
+    queue_item_id: str,
+    html_url: str,
+    original_url: str,
+) -> None:
+    """Process product page HTML with queue-based workflow.
+
+    Parses product data, applies filters, scores, and stores in database.
+    Handles bot detection and saves blocked HTML for debugging.
+    """
+    from ecom_arb.db.base import async_session_maker
+    from ecom_arb.scoring.models import Product as ScoringProduct
+    from ecom_arb.scoring.models import ProductCategory
+    from ecom_arb.scoring.scorer import score_product
+
+    async with async_session_maker() as db:
+        try:
+            # Get the queue item
+            result = await db.execute(
+                select(CrawlQueue).where(CrawlQueue.id == queue_item_id)
+            )
+            queue_item = result.scalar_one_or_none()
+
+            if not queue_item:
+                logger.warning(f"Queue item {queue_item_id} not found")
+                return
+
+            # Parse product data
+            product_data = await fetch_and_parse_cj_product(html_url)
+            logger.info(f"Job {job_id}: Parsed product {product_data.id}: {product_data.name}")
+
+            # Get job config
+            job_result = await db.execute(select(CrawlJob).where(CrawlJob.id == job_id))
+            job = job_result.scalar_one_or_none()
+
+            if not job or job.status == CrawlJobStatus.CANCELLED:
+                queue_item.status = CrawlQueueStatus.FAILED
+                queue_item.error_message = "Job cancelled or not found"
+                await db.commit()
+                return
+
+            config = job.config or {}
+
+            # Safety dedup check
+            existing = await db.execute(
+                select(ScoredProduct).where(
+                    ScoredProduct.source_product_id == product_data.id
+                )
+            )
+            if existing.scalar_one_or_none():
+                logger.info(f"Job {job_id}: Product {product_data.id} already exists, skipping")
+                queue_item.status = CrawlQueueStatus.COMPLETED
+                queue_item.completed_at = datetime.utcnow()
+                await db.commit()
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
+                await _check_queue_completion(job_id, db)
+                return
+
+            # Apply filters
+            filtered_reason = _apply_crawl_filters(product_data, config)
+            if filtered_reason:
+                logger.debug(f"Job {job_id}: Product {product_data.id} filtered: {filtered_reason}")
+                queue_item.status = CrawlQueueStatus.COMPLETED
+                queue_item.completed_at = datetime.utcnow()
+                await db.commit()
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
+                await _check_queue_completion(job_id, db)
+                return
+
+            # Create scoring input (same as before)
+            sell_price = float(product_data.sell_price_min)
+            selling_price = round(sell_price / 0.30, 2)
+            selling_price = max(selling_price, 50.0)
+
+            category = _map_category(product_data.categories)
+
+            warehouse = product_data.warehouse_country or "CN"
+            if warehouse == "US":
+                ship_min, ship_max = 3, 7
+                shipping_cost = 5.0
+            else:
+                ship_min, ship_max = 10, 20
+                shipping_cost = 8.0
+
+            scoring_input = ScoringProduct(
+                id=product_data.id,
+                name=product_data.name,
+                product_cost=sell_price,
+                shipping_cost=shipping_cost,
+                selling_price=selling_price,
+                category=category,
+                requires_sizing=False,
+                is_fragile=False,
+                weight_grams=product_data.weight_min or 500,
+                supplier_rating=4.7,
+                supplier_age_months=24,
+                supplier_feedback_count=product_data.list_count * 5 if product_data.list_count else 500,
+                shipping_days_min=ship_min,
+                shipping_days_max=ship_max,
+                has_fast_shipping=ship_max <= 10,
+                estimated_cpc=0.50,
+                monthly_search_volume=1000,
+                amazon_prime_exists=False,
+                amazon_review_count=0,
+                source="cj_crawl",
+                source_url=original_url,
+            )
+
+            # Score product
+            score = score_product(scoring_input)
+
+            # Store in database
+            scored_product = ScoredProduct(
+                source_product_id=product_data.id,
+                name=product_data.name,
+                crawl_job_id=job_id,
+                source="cj_crawl",
+                source_url=original_url,
+                product_cost=Decimal(str(sell_price)),
+                shipping_cost=Decimal(str(shipping_cost)),
+                selling_price=Decimal(str(selling_price)),
+                category=category.value,
+                estimated_cpc=Decimal("0.50"),
+                weight_grams=product_data.weight_min,
+                shipping_days_min=ship_min,
+                shipping_days_max=ship_max,
+                warehouse_country=warehouse,
+                supplier_name=product_data.supplier_name,
+                inventory_count=product_data.warehouse_inventory,
+                cogs=Decimal(str(score.cogs)),
+                gross_margin=Decimal(str(score.gross_margin)),
+                net_margin=Decimal(str(score.net_margin)),
+                max_cpc=Decimal(str(score.max_cpc)),
+                cpc_buffer=Decimal(str(score.cpc_buffer)),
+                passed_filters=score.passed_filters,
+                rejection_reasons=score.rejection_reasons,
+                points=score.points,
+                point_breakdown=score.point_breakdown,
+                rank_score=Decimal(str(score.rank_score)) if score.rank_score else None,
+                recommendation=score.recommendation,
+            )
+
+            db.add(scored_product)
+
+            # Mark queue item as completed
+            queue_item.status = CrawlQueueStatus.COMPLETED
+            queue_item.completed_at = datetime.utcnow()
+
+            await _log_crawl_event(
+                job_id, "parse_ok", db,
+                queue_item_id=queue_item_id,
+                url=original_url,
+                keyword=queue_item.keyword,
+                details={
+                    "product_id": product_data.id,
+                    "passed": score.passed_filters,
+                    "margin": float(score.gross_margin),
+                },
+            )
+
+            await db.commit()
+            logger.info(f"Job {job_id}: Scored product {product_data.id} - {score.recommendation}")
+
+            # Log based on result
+            short_name = product_data.name[:30] + "..." if len(product_data.name) > 30 else product_data.name
+            if score.passed_filters:
+                await _add_job_log(job_id, "info", f"✓ PASSED: {short_name} (margin: {score.gross_margin:.1f}%)", db)
+            else:
+                await _add_job_log(job_id, "warn", f"✗ Rejected: {short_name}", db)
+
+            # Schedule next submission
+            asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
+
+            # Check if job is complete
+            await _check_queue_completion(job_id, db)
+
+        except ProductRemovedError as e:
+            logger.debug(f"Job {job_id}: Product removed from CJ: {original_url}")
+            async with async_session_maker() as db:
+                queue_result = await db.execute(
+                    select(CrawlQueue).where(CrawlQueue.id == queue_item_id)
+                )
+                queue_item = queue_result.scalar_one_or_none()
+                if queue_item:
+                    queue_item.status = CrawlQueueStatus.COMPLETED  # Not an error
+                    queue_item.completed_at = datetime.utcnow()
+                    queue_item.error_message = "Product removed"
+                await db.commit()
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
+                await _check_queue_completion(job_id, db)
+
+        except CJParserError as e:
+            logger.error(f"Job {job_id}: Product parse error: {e}")
+            async with async_session_maker() as db:
+                queue_result = await db.execute(
+                    select(CrawlQueue).where(CrawlQueue.id == queue_item_id)
+                )
+                queue_item = queue_result.scalar_one_or_none()
+                if queue_item:
+                    # Check if this might be a bot block
+                    if "bot" in str(e).lower() or "block" in str(e).lower():
+                        # Save HTML for debugging
+                        try:
+                            from ecom_arb.services.cj_parser import fetch_html
+                            html = await fetch_html(html_url)
+                            _save_blocked_html(job_id, queue_item_id, html, str(e))
+                        except Exception:
+                            pass
+                    await _handle_queue_failure(queue_item, str(e), db)
+                await _add_job_log(job_id, "error", f"Parse error: {str(e)[:50]}", db)
+                await db.commit()
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
+
+        except Exception as e:
+            logger.exception(f"Job {job_id}: Unexpected error processing product: {e}")
+            async with async_session_maker() as db:
+                queue_result = await db.execute(
+                    select(CrawlQueue).where(CrawlQueue.id == queue_item_id)
+                )
+                queue_item = queue_result.scalar_one_or_none()
+                if queue_item:
+                    await _handle_queue_failure(queue_item, str(e), db)
+                await db.commit()
+                asyncio.create_task(_submit_next_from_queue(job_id, delay=random.uniform(SUBMISSION_DELAY_MIN, SUBMISSION_DELAY_MAX)))
+
+
+# --- Debug Endpoints ---
+
+
+class CrawlEventResponse(BaseModel):
+    """Response for a crawl event."""
+
+    id: str
+    job_id: str
+    queue_item_id: str | None
+    event_type: str
+    url: str | None
+    keyword: str | None
+    details: dict[str, Any]
+    created_at: datetime
+
+
+@router.get("/{job_id}/events", response_model=list[CrawlEventResponse])
+async def get_crawl_events(
+    job_id: str,
+    event_type: str | None = Query(None, description="Filter by event type"),
+    limit: int = Query(100, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+) -> list[CrawlEventResponse]:
+    """Get crawl events for debugging."""
+    query = select(CrawlEvent).where(CrawlEvent.job_id == job_id)
+    if event_type:
+        query = query.where(CrawlEvent.event_type == event_type)
+    query = query.order_by(desc(CrawlEvent.created_at)).limit(limit)
+
+    result = await db.execute(query)
+    events = result.scalars().all()
+
+    return [
+        CrawlEventResponse(
+            id=e.id,
+            job_id=e.job_id,
+            queue_item_id=e.queue_item_id,
+            event_type=e.event_type,
+            url=e.url,
+            keyword=e.keyword,
+            details=e.details,
+            created_at=e.created_at,
+        )
+        for e in events
+    ]
+
+
+class TimelineEntry(BaseModel):
+    """Entry in submission timeline."""
+
+    url: str
+    keyword: str | None
+    timestamp: datetime
+    gap_seconds: float | None
+
+
+class CrawlTimelineResponse(BaseModel):
+    """Response for crawl timeline."""
+
+    timeline: list[TimelineEntry]
+    total_submissions: int
+
+
+@router.get("/{job_id}/timeline", response_model=CrawlTimelineResponse)
+async def get_crawl_timeline(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> CrawlTimelineResponse:
+    """Get submission timeline for pattern analysis."""
+    result = await db.execute(
+        select(CrawlEvent)
+        .where(CrawlEvent.job_id == job_id)
+        .where(CrawlEvent.event_type == "submit")
+        .order_by(CrawlEvent.created_at)
+    )
+    submissions = result.scalars().all()
+
+    timeline = []
+    for i, event in enumerate(submissions):
+        gap = None
+        if i > 0:
+            gap = (event.created_at - submissions[i - 1].created_at).total_seconds()
+        timeline.append(
+            TimelineEntry(
+                url=event.url or "",
+                keyword=event.keyword,
+                timestamp=event.created_at,
+                gap_seconds=gap,
+            )
+        )
+
+    return CrawlTimelineResponse(
+        timeline=timeline,
+        total_submissions=len(timeline),
+    )
