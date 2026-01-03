@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 
 import { Card } from "@/components/ui/card";
@@ -537,6 +538,28 @@ function ProductDetailModal({
               </span>
               <RecommendationBadge rec={product.recommendation} />
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              {product.source_url && (
+                <a
+                  href={product.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 hover:underline"
+                >
+                  View on CJ ↗
+                </a>
+              )}
+              <button
+                onClick={() => {
+                  const url = `${window.location.origin}/admin?product=${product.id}`;
+                  navigator.clipboard.writeText(url);
+                  alert("Link copied to clipboard!");
+                }}
+                className="inline-flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800"
+              >
+                📋 Copy link
+              </button>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -1048,7 +1071,9 @@ function ProductRow({
   );
 }
 
-export default function AdminPage() {
+function AdminPageContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [products, setProducts] = useState<ScoredProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1068,6 +1093,14 @@ export default function AdminPage() {
   const [selectedProduct, setSelectedProduct] = useState<ScoredProductFull | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [discovering, setDiscovering] = useState(false);
+
+  // Handle URL parameter for deep-linking to a product
+  useEffect(() => {
+    const productId = searchParams.get("product");
+    if (productId && !selectedProduct) {
+      handleSelectProduct(productId);
+    }
+  }, [searchParams]);
 
   const loadProducts = async () => {
     setLoading(true);
@@ -1137,6 +1170,8 @@ export default function AdminPage() {
     try {
       const product = await getScoredProduct(id);
       setSelectedProduct(product);
+      // Update URL with product ID for deep-linking
+      router.push(`/admin?product=${id}`, { scroll: false });
     } catch (err) {
       setActionMessage({
         type: "error",
@@ -1146,6 +1181,12 @@ export default function AdminPage() {
     } finally {
       setLoadingDetail(false);
     }
+  };
+
+  const handleCloseProduct = () => {
+    setSelectedProduct(null);
+    // Remove product ID from URL
+    router.push("/admin", { scroll: false });
   };
 
   const handleSeedDemo = async () => {
@@ -1208,7 +1249,7 @@ export default function AdminPage() {
       setActionMessage({ type: "success", text: result.message });
       setProducts((prev) => prev.filter((p) => p.id !== id));
       setTotal((prev) => prev - 1);
-      setSelectedProduct(null);
+      handleCloseProduct();
     } catch (err) {
       setActionMessage({
         type: "error",
@@ -1225,7 +1266,7 @@ export default function AdminPage() {
       setActionMessage({ type: "success", text: "Product rejected" });
       setProducts((prev) => prev.filter((p) => p.id !== id));
       setTotal((prev) => prev - 1);
-      setSelectedProduct(null);
+      handleCloseProduct();
     } catch (err) {
       setActionMessage({
         type: "error",
@@ -1294,7 +1335,7 @@ export default function AdminPage() {
       {selectedProduct && (
         <ProductDetailModal
           product={selectedProduct}
-          onClose={() => setSelectedProduct(null)}
+          onClose={handleCloseProduct}
           onApprove={handleApprove}
           onReject={handleReject}
         />
@@ -1457,5 +1498,13 @@ export default function AdminPage() {
         </Card>
       </div>
     </main>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-gray-500">Loading...</div>}>
+      <AdminPageContent />
+    </Suspense>
   );
 }
