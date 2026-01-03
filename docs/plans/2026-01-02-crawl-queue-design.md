@@ -251,9 +251,160 @@ async def check_job_completion(job_id: str):
 5. Monitor for bot detection issues
 6. Tune delay/retry parameters based on results
 
+## Debugging & Observability
+
+### 1. Blocked HTML Capture
+
+Save raw HTML when bot detection is triggered for manual inspection:
+
+```python
+BLOCKED_HTML_DIR = "data/debug/blocked_html"
+
+def save_blocked_html(job_id: str, queue_item_id: str, html: str, reason: str):
+    """Save blocked page HTML for debugging."""
+    os.makedirs(BLOCKED_HTML_DIR, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{timestamp}_{job_id}_{queue_item_id}.html"
+    filepath = os.path.join(BLOCKED_HTML_DIR, filename)
+
+    with open(filepath, "w") as f:
+        f.write(f"<!-- BLOCKED: {reason} -->\n")
+        f.write(f"<!-- Job: {job_id}, Queue Item: {queue_item_id} -->\n")
+        f.write(f"<!-- Timestamp: {timestamp} -->\n\n")
+        f.write(html)
+
+    logger.info(f"Saved blocked HTML to {filepath}")
+```
+
+### 2. Crawl Event Log
+
+Track all crawl activity for debugging submission patterns:
+
+```sql
+CREATE TABLE crawl_events (
+    id              TEXT PRIMARY KEY,
+    job_id          TEXT NOT NULL,
+    queue_item_id   TEXT,                    -- NULL for job-level events
+    event_type      TEXT NOT NULL,           -- submit, webhook, parse, block, retry, complete, fail
+    url             TEXT,
+    keyword         TEXT,
+    details         JSON,                    -- Flexible metadata
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (job_id) REFERENCES crawl_jobs(id)
+);
+
+CREATE INDEX idx_events_job ON crawl_events(job_id, created_at);
+```
+
+**Event types:**
+
+| Event | When | Details |
+|-------|------|---------|
+| `submit` | URL sent to SerpWatch | `{delay_seconds, queue_position}` |
+| `webhook` | SerpWatch callback received | `{success, latency_ms}` |
+| `parse_ok` | Successfully parsed page | `{products_found, pages_found}` |
+| `parse_fail` | Parse error | `{error, html_saved}` |
+| `block` | Bot detection triggered | `{reason, html_path, retry_count}` |
+| `retry` | Scheduled retry | `{retry_count, next_attempt_at}` |
+| `complete` | Queue item completed | `{total_time_ms}` |
+| `fail` | Max retries exceeded | `{total_retries, last_error}` |
+
+**Helper function:**
+
+```python
+async def log_crawl_event(
+    job_id: str,
+    event_type: str,
+    queue_item_id: str = None,
+    url: str = None,
+    keyword: str = None,
+    details: dict = None,
+    db: AsyncSession = None,
+):
+    """Log a crawl event for debugging."""
+    event = CrawlEvent(
+        id=str(uuid.uuid4()),
+        job_id=job_id,
+        queue_item_id=queue_item_id,
+        event_type=event_type,
+        url=url,
+        keyword=keyword,
+        details=details or {},
+    )
+    db.add(event)
+```
+
+### 3. Debug Endpoints
+
+```python
+@router.get("/{job_id}/events")
+async def get_crawl_events(
+    job_id: str,
+    event_type: str = None,  # Filter by type
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get crawl events for debugging."""
+    query = select(CrawlEvent).where(CrawlEvent.job_id == job_id)
+    if event_type:
+        query = query.where(CrawlEvent.event_type == event_type)
+    query = query.order_by(desc(CrawlEvent.created_at)).limit(limit)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+@router.get("/{job_id}/timeline")
+async def get_crawl_timeline(job_id: str, db: AsyncSession = Depends(get_db)):
+    """Get submission timeline for pattern analysis."""
+    events = await db.execute(
+        select(CrawlEvent)
+        .where(CrawlEvent.job_id == job_id)
+        .where(CrawlEvent.event_type == 'submit')
+        .order_by(CrawlEvent.created_at)
+    )
+
+    submissions = events.scalars().all()
+
+    # Calculate gaps between submissions
+    timeline = []
+    for i, event in enumerate(submissions):
+        gap = None
+        if i > 0:
+            gap = (event.created_at - submissions[i-1].created_at).total_seconds()
+        timeline.append({
+            "url": event.url,
+            "keyword": event.keyword,
+            "timestamp": event.created_at,
+            "gap_seconds": gap,
+        })
+
+    return {"timeline": timeline, "total_submissions": len(timeline)}
+```
+
+### 4. Usage
+
+**View blocked pages:**
+```bash
+ls data/debug/blocked_html/
+# Open in browser to see what the block looks like
+```
+
+**Analyze submission pattern:**
+```bash
+curl http://localhost:8000/api/crawl/{job_id}/timeline | jq '.timeline[] | {keyword, gap_seconds}'
+```
+
+**Check for blocks:**
+```bash
+curl http://localhost:8000/api/crawl/{job_id}/events?event_type=block
+```
+
 ## Success Metrics
 
 - Reduced bot detection rate (fewer "blocked" errors)
 - Jobs complete successfully with partial results on failures
 - Retry logic recovers from temporary blocks
 - Queue drains predictably without bursts
+- Debug logs capture enough info to diagnose issues
