@@ -92,6 +92,30 @@ echo -ne "\033]0;[{agent_name}] | PROJECT_NAME\007"
 
 ---
 
+### Step 1.5: Project-Specific Setup (ecom-arb)
+
+**CJ Crawl System requires ngrok for webhooks:**
+
+```bash
+# Check if ngrok is running
+pgrep -x ngrok || echo "⚠️  ngrok NOT running - crawls will fail"
+
+# If not running, start it:
+ngrok http 8000 &
+
+# Get the public URL:
+curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url'
+
+# Update .env with the URL (replace xxxx with actual ngrok subdomain):
+# WEBHOOK_BASE_URL=https://xxxx.ngrok-free.app
+
+# Restart API server if .env changed
+```
+
+**Skip if:** Not working on crawl-related tasks.
+
+---
+
 ### Step 2: Orient
 
 **Read project documentation:**
