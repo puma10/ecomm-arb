@@ -157,6 +157,46 @@ def _fix_javascript_json(json_str: str) -> str:
     return json_str
 
 
+class ProductRemovedError(CJParserError):
+    """Exception raised when a product has been removed from CJ."""
+
+    pass
+
+
+def _detect_removed_product(html: str) -> bool:
+    """Check if the HTML indicates a removed product.
+
+    CJ shows "Product removed" message for discontinued products.
+    """
+    removed_patterns = [
+        r"Product removed",
+        r"product.*removed",
+        r"Product.*not.*found",
+        r"Product.*unavailable",
+        r"productDetailData\s*=\s*\{\s*\}",  # Empty productDetailData
+    ]
+    for pattern in removed_patterns:
+        if re.search(pattern, html, re.IGNORECASE):
+            return True
+    return False
+
+
+def _detect_bot_block(html: str) -> bool:
+    """Check if the HTML indicates bot detection or blocking."""
+    block_patterns = [
+        r"captcha",
+        r"verify.*human",
+        r"access.*denied",
+        r"blocked",
+        r"cloudflare",
+        r"security.*check",
+    ]
+    for pattern in block_patterns:
+        if re.search(pattern, html, re.IGNORECASE):
+            return True
+    return False
+
+
 def parse_product_detail_data(html: str) -> dict[str, Any]:
     """Extract productDetailData from CJ product page HTML.
 
@@ -170,8 +210,20 @@ def parse_product_detail_data(html: str) -> dict[str, Any]:
         Parsed JSON data as dictionary
 
     Raises:
+        ProductRemovedError: If product has been removed from CJ
         CJParserError: If data cannot be found or parsed
     """
+    # First check for removed products
+    if _detect_removed_product(html):
+        raise ProductRemovedError("Product has been removed from CJ")
+
+    # Check for bot blocking
+    if _detect_bot_block(html):
+        # Log HTML snippet for debugging
+        snippet = html[:500] if len(html) > 500 else html
+        logger.warning(f"Possible bot block detected. HTML snippet: {snippet[:200]}")
+        raise CJParserError("Bot detection page returned")
+
     # Find productDetailData assignment
     patterns = [
         r"productDetailData\s*=\s*",
@@ -191,19 +243,32 @@ def parse_product_detail_data(html: str) -> dict[str, Any]:
                 break
 
     if start_pos == -1:
+        # Log HTML snippet for debugging
+        snippet = html[:1000] if len(html) > 1000 else html
+        # Check if HTML looks like a valid CJ page
+        has_cj_elements = "cjdropshipping" in html.lower() or "dropshipping" in html.lower()
+        logger.warning(
+            f"productDetailData not found. "
+            f"HTML length: {len(html)}, has_cj_elements: {has_cj_elements}, "
+            f"snippet: {snippet[:300]}"
+        )
         raise CJParserError("productDetailData not found in HTML")
 
     # Extract JSON with balanced braces
     json_str = _extract_json_with_balanced_braces(html, start_pos)
 
     if not json_str or len(json_str) < 10:
-        raise CJParserError("Failed to extract productDetailData JSON")
+        raise CJParserError("productDetailData is empty (product may be removed)")
 
     # Fix JavaScript-specific syntax
     json_str = _fix_javascript_json(json_str)
 
     try:
-        return json.loads(json_str)
+        data = json.loads(json_str)
+        # Validate that we have actual product data
+        if not data or not data.get("id"):
+            raise CJParserError("productDetailData is empty (product may be removed)")
+        return data
     except json.JSONDecodeError as e:
         # Log a snippet for debugging
         snippet = json_str[:500] if len(json_str) > 500 else json_str

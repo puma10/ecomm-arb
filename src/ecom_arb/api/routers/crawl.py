@@ -37,6 +37,7 @@ from ecom_arb.integrations.serpwatch import (
 )
 from ecom_arb.services.cj_parser import (
     CJParserError,
+    ProductRemovedError,
     SearchResultsData,
     extract_product_id,
     fetch_and_parse_cj_product,
@@ -907,18 +908,28 @@ async def _process_product_result(
             else:
                 await _add_job_log(job_id, "warn", f"✗ Rejected: {short_name}", db)
 
+        except ProductRemovedError as e:
+            # Product was removed from CJ - this is expected and not an error
+            logger.debug(f"Job {job_id}: Product removed from CJ: {original_url}")
+            await _update_job_progress(
+                job_id, {"+product_urls_completed": 1, "+products_skipped_filtered": 1}, db
+            )
+            await _check_job_completion(job_id, db)
+            await db.commit()
         except CJParserError as e:
             logger.error(f"Job {job_id}: Product parse error: {e}")
             await _update_job_progress(
                 job_id, {"+errors": 1, "+product_urls_completed": 1}, db
             )
             await _add_job_log(job_id, "error", f"Parse error: {str(e)[:50]}", db)
+            await _check_job_completion(job_id, db)
             await db.commit()
         except Exception as e:
             logger.exception(f"Job {job_id}: Unexpected error processing product: {e}")
             await _update_job_progress(
                 job_id, {"+errors": 1, "+product_urls_completed": 1}, db
             )
+            await _check_job_completion(job_id, db)
             await db.commit()
 
 
