@@ -224,11 +224,18 @@ class KeywordExplorer:
                 estimates = self._get_keyword_estimates(keywords)
                 explored_count += len(keywords)
 
-                # Score relevance with LLM
+                # Take only top 10 by volume for quick analysis
+                # Deep analysis can be triggered manually for promising products
+                sorted_estimates = sorted(estimates, key=lambda e: e.avg_monthly_searches, reverse=True)
+                top_estimates = sorted_estimates[:10]
+
+                # Score relevance with LLM (just 10 keywords = 1 LLM call)
                 scored = await self._score_keywords(
-                    [e.keyword for e in estimates],
+                    [e.keyword for e in top_estimates],
                     product_understanding,
                 )
+
+                estimates = top_estimates
 
                 # Build opportunities
                 for estimate in estimates:
@@ -248,17 +255,11 @@ class KeywordExplorer:
                                 depth=0,
                             )
 
-                # Expand if max_depth > 0
-                if self.max_depth > 0:
-                    expansion_keywords = await self._expand_keywords(
-                        estimates,
-                        product_understanding,
-                        tier,
-                        current_depth=1,
-                        all_keywords=all_keywords,
-                    )
-                    explored_count += expansion_keywords
-                    max_depth_reached = max(max_depth_reached, min(self.max_depth, 1))
+                # Skip recursive expansion for quick analysis
+                # Deep analysis endpoint can enable this later
+                # if self.max_depth > 1:
+                #     expansion_keywords = await self._expand_keywords(...)
+                max_depth_reached = 1
 
             except GoogleAdsError as e:
                 error_msg = f"Google Ads error for {tier} tier: {str(e)}"

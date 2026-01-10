@@ -1363,14 +1363,13 @@ async def analyze_single_product(
 
     logger.info(f"Product type: {understanding.product_type}")
 
-    # Step 2: Explore keywords with Google Ads
-    # Note: Set max_depth=0 to skip Google Ads API and use LLM seed keywords only
-    # This is faster but won't have volume/CPC data
-    logger.info("Exploring keywords...")
+    # Step 2: Quick keyword exploration (top 10 per tier from Google Ads)
+    # For deep exploration, use /analyze-product-deep endpoint
+    logger.info("Exploring keywords (quick mode)...")
     keyword_exploration = await explore_product_keywords(
         understanding,
-        max_depth=0,  # Skip Google Ads for now (TODO: enable when API is stable)
-        min_relevance=50,
+        max_depth=1,  # Get Google Ads data but no recursive expansion
+        min_relevance=40,
     )
     logger.info(f"Explored {keyword_exploration.total_explored} keywords, found {len(keyword_exploration.keywords)}")
 
