@@ -47,10 +47,9 @@ class Settings(BaseSettings):
     # Webhook / SerpWatch
     webhook_base_url: str = "http://localhost:6025"  # ngrok URL for SerpWatch postbacks
 
-    # Residential Proxy (for Amazon scraping with US geo-targeting)
-    # Format: http://user:pass@host:port
-    # Supports: PacketStream, BrightData, Oxylabs, Smartproxy, IPRoyal
-    residential_proxy_url: str = ""
+    # ScraperAPI for Amazon scraping (handles blocks, CAPTCHAs, geo-targeting)
+    # Get key from https://www.scraperapi.com/
+    scraperapi_key: str = ""
 
 
 @lru_cache

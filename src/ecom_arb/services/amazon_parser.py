@@ -398,10 +398,10 @@ async def parse_amazon_search_from_url(html_url: str, keyword: str) -> AmazonSea
 
 
 async def scrape_amazon_direct(keyword: str, page: int = 1) -> AmazonSearchResults:
-    """Scrape Amazon search results directly using US residential proxy.
+    """Scrape Amazon search results using ScraperAPI.
 
-    This bypasses SerpWatch and fetches directly from Amazon with a US-based
-    residential proxy to ensure USD pricing.
+    Uses ScraperAPI to fetch Amazon pages with US geo-targeting,
+    automatic CAPTCHA solving, and anti-bot bypass.
 
     Args:
         keyword: Search keyword
@@ -413,52 +413,46 @@ async def scrape_amazon_direct(keyword: str, page: int = 1) -> AmazonSearchResul
     Raises:
         AmazonParserError: If fetch or parsing fails
     """
-    from ecom_arb.services.proxy import get_us_proxy
+    from urllib.parse import urlencode
 
-    url = build_amazon_search_url(keyword, page)
-    proxy = get_us_proxy()
+    from ecom_arb.config import get_settings
 
-    # Common browser headers to avoid detection
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
+    settings = get_settings()
+    api_key = settings.scraperapi_key
+
+    if not api_key:
+        raise AmazonParserError("SCRAPERAPI_KEY not configured")
+
+    # Build Amazon search URL
+    amazon_url = build_amazon_search_url(keyword, page)
+
+    # Build ScraperAPI request URL
+    # country_code=us ensures US geo-targeting for USD pricing
+    params = {
+        "api_key": api_key,
+        "url": amazon_url,
+        "country_code": "us",
     }
+    scraper_url = f"http://api.scraperapi.com?{urlencode(params)}"
 
     try:
-        async with httpx.AsyncClient(
-            proxy=proxy,
-            timeout=30.0,
-            follow_redirects=True,
-            headers=headers,
-        ) as client:
-            logger.info(f"Fetching Amazon search: {url} (proxy: {'enabled' if proxy else 'disabled'})")
-            response = await client.get(url)
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            logger.info(f"Fetching Amazon via ScraperAPI: {keyword} (page {page})")
+            response = await client.get(scraper_url)
             response.raise_for_status()
             html = response.text
 
-            # Check for CAPTCHA or block
-            if "Enter the characters you see below" in html or "api-services-support@amazon.com" in html:
-                raise AmazonParserError("Amazon CAPTCHA detected - proxy may be blocked")
+            # Check for CAPTCHA (shouldn't happen with ScraperAPI but just in case)
+            if "Enter the characters you see below" in html:
+                raise AmazonParserError("Amazon CAPTCHA detected - ScraperAPI failed to solve")
 
-            # Verify we got US pricing (check for $ symbol)
+            # Verify we got US pricing
             if "$" not in html and "USD" not in html:
-                logger.warning("Response may not contain USD pricing - check proxy geo-targeting")
+                logger.warning("Response may not contain USD pricing")
 
             return parse_search_results(html, keyword)
 
     except httpx.HTTPStatusError as e:
-        raise AmazonParserError(f"Amazon returned HTTP {e.response.status_code}") from e
+        raise AmazonParserError(f"ScraperAPI returned HTTP {e.response.status_code}") from e
     except httpx.RequestError as e:
-        raise AmazonParserError(f"Request failed: {e}") from e
+        raise AmazonParserError(f"ScraperAPI request failed: {e}") from e

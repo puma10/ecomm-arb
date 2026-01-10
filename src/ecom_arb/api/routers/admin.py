@@ -1190,16 +1190,18 @@ async def enrich_amazon_prices(
             if results.products:
                 product.amazon_median_price = results.median_price
                 product.amazon_min_price = results.min_price
-                product.amazon_max_price = results.max_price
-                product.amazon_avg_price = results.avg_price
-                product.amazon_review_count = results.avg_review_count
-                product.amazon_prime_exists = results.prime_percentage > 0.3  # 30%+ Prime = competition
-                product.amazon_result_count = results.total_results or len(results.products)
+                product.amazon_avg_review_count = results.avg_review_count
+                product.amazon_prime_percentage = Decimal(str(results.prime_percentage))
+                product.amazon_search_results = {
+                    "total_results": results.total_results or len(results.products),
+                    "avg_price": float(results.avg_price) if results.avg_price else None,
+                    "max_price": float(results.max_price) if results.max_price else None,
+                }
 
                 enriched += 1
                 logger.info(
                     f"Enriched product {product.id}: median=${results.median_price}, "
-                    f"min=${results.min_price}, max=${results.max_price}, "
+                    f"min=${results.min_price}, "
                     f"reviews={results.avg_review_count}, prime={results.prime_percentage:.0%}"
                 )
             else:
