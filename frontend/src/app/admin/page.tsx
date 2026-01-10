@@ -688,10 +688,24 @@ function ProductDetailModal({
               Advertising Analysis
             </h4>
             <div className="space-y-2 text-sm">
+              {product.keyword_analysis?.best_keyword && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Best Keyword</span>
+                  <span className="font-medium text-blue-600">
+                    {product.keyword_analysis.best_keyword}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-gray-600">Est. CPC (Google Ads)</span>
                 <span className="font-mono font-bold">
                   ${product.estimated_cpc.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Monthly Search Volume</span>
+                <span className="font-mono font-bold">
+                  {product.monthly_search_volume?.toLocaleString() ?? "-"}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -727,6 +741,191 @@ function ProductDetailModal({
             </div>
           </div>
         </div>
+
+        {/* Amazon Competitor Pricing */}
+        {product.amazon_search_results && product.amazon_search_results.products?.length > 0 && (
+          <div className="mb-6">
+            <div className="rounded-lg border bg-blue-50 p-4">
+              <h4 className="mb-3 font-semibold text-gray-800 flex items-center gap-2">
+                <span>Amazon Competitor Pricing</span>
+                <a
+                  href={`https://www.amazon.com/s?k=${encodeURIComponent(product.amazon_search_results.keyword || '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-800 text-sm font-normal"
+                >
+                  View on Amazon →
+                </a>
+              </h4>
+
+              {/* Price Range Chart */}
+              <div className="mb-4">
+                <div className="flex justify-between text-xs text-gray-500 mb-1">
+                  <span>Min: ${product.amazon_search_results.min_price?.toFixed(2) || '-'}</span>
+                  <span>Median: ${product.amazon_search_results.median_price?.toFixed(2) || '-'}</span>
+                  <span>Max: ${product.amazon_search_results.max_price?.toFixed(2) || '-'}</span>
+                </div>
+                <div className="relative h-8 bg-gradient-to-r from-green-200 via-yellow-200 to-red-200 rounded-lg">
+                  {/* Price range bar */}
+                  {(() => {
+                    const minPrice = product.amazon_search_results.min_price || 0;
+                    const maxPrice = product.amazon_search_results.max_price || 100;
+                    const range = maxPrice - minPrice;
+                    const ourPrice = product.selling_price;
+                    const ourPosition = range > 0 ? ((ourPrice - minPrice) / range) * 100 : 50;
+                    const clampedPosition = Math.max(0, Math.min(100, ourPosition));
+
+                    return (
+                      <>
+                        {/* Our price marker */}
+                        <div
+                          className="absolute top-0 bottom-0 w-1 bg-blue-600 rounded"
+                          style={{ left: `${clampedPosition}%` }}
+                          title={`Our Price: $${ourPrice.toFixed(2)}`}
+                        >
+                          <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 bg-blue-600 text-white text-xs px-1.5 py-0.5 rounded whitespace-nowrap">
+                            Ours: ${ourPrice.toFixed(2)}
+                          </div>
+                        </div>
+                        {/* Competitor price dots */}
+                        {product.amazon_search_results.products
+                          .filter(p => p.price && !p.is_sponsored)
+                          .slice(0, 10)
+                          .map((p, i) => {
+                            const pos = range > 0 ? ((p.price! - minPrice) / range) * 100 : 50;
+                            return (
+                              <div
+                                key={i}
+                                className="absolute top-1/2 w-2 h-2 bg-gray-600 rounded-full transform -translate-y-1/2 opacity-60"
+                                style={{ left: `${Math.max(0, Math.min(100, pos))}%` }}
+                                title={`${p.title?.slice(0, 50)}: $${p.price?.toFixed(2)}`}
+                              />
+                            );
+                          })}
+                      </>
+                    );
+                  })()}
+                </div>
+                <div className="text-center text-xs text-gray-500 mt-1">
+                  {product.selling_price < (product.amazon_search_results.median_price || 0)
+                    ? `✅ ${((1 - product.selling_price / (product.amazon_search_results.median_price || 1)) * 100).toFixed(0)}% below median`
+                    : `⚠️ ${((product.selling_price / (product.amazon_search_results.median_price || 1) - 1) * 100).toFixed(0)}% above median`
+                  }
+                </div>
+              </div>
+
+              {/* Summary Stats */}
+              <div className="grid grid-cols-4 gap-2 text-sm">
+                <div className="text-center p-2 bg-white rounded">
+                  <div className="text-gray-500 text-xs">Products</div>
+                  <div className="font-bold">{product.amazon_search_results.products.filter(p => !p.is_sponsored).length}</div>
+                </div>
+                <div className="text-center p-2 bg-white rounded">
+                  <div className="text-gray-500 text-xs">Avg Reviews</div>
+                  <div className="font-bold">{product.amazon_avg_review_count?.toLocaleString() || '-'}</div>
+                </div>
+                <div className="text-center p-2 bg-white rounded">
+                  <div className="text-gray-500 text-xs">Prime %</div>
+                  <div className="font-bold">{product.amazon_prime_percentage?.toFixed(0) || '-'}%</div>
+                </div>
+                <div className="text-center p-2 bg-white rounded">
+                  <div className="text-gray-500 text-xs">Avg Price</div>
+                  <div className="font-bold">${product.amazon_search_results.avg_price?.toFixed(2) || '-'}</div>
+                </div>
+              </div>
+
+              {/* Top Competitors Table */}
+              <div className="mt-4">
+                <h5 className="text-sm font-medium text-gray-700 mb-2">Top Competitors</h5>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b text-left text-gray-500">
+                        <th className="pb-1 pr-2">#</th>
+                        <th className="pb-1 pr-2">Product</th>
+                        <th className="pb-1 pr-2 text-right">Price</th>
+                        <th className="pb-1 pr-2 text-right">Reviews</th>
+                        <th className="pb-1 text-center">Prime</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {product.amazon_search_results.products
+                        .filter(p => !p.is_sponsored && p.price)
+                        .slice(0, 5)
+                        .map((p, idx) => (
+                          <tr key={idx} className="border-b border-gray-100">
+                            <td className="py-1 pr-2 text-gray-400">{p.position}</td>
+                            <td className="py-1 pr-2 max-w-[200px] truncate">
+                              <a
+                                href={`https://www.amazon.com/dp/${p.asin}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline"
+                              >
+                                {p.title?.slice(0, 60)}...
+                              </a>
+                            </td>
+                            <td className="py-1 pr-2 text-right font-mono">${p.price?.toFixed(2)}</td>
+                            <td className="py-1 pr-2 text-right">{p.review_count.toLocaleString()}</td>
+                            <td className="py-1 text-center">{p.is_prime ? '✓' : ''}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Keyword Analysis */}
+        {product.keyword_analysis?.results && product.keyword_analysis.results.length > 0 && (
+          <div className="mb-6">
+            <div className="rounded-lg border bg-gray-50 p-4">
+              <h4 className="mb-3 font-semibold text-gray-800">
+                Keyword Analysis (Top 10)
+              </h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-gray-600">
+                      <th className="pb-2 pr-4">Keyword</th>
+                      <th className="pb-2 pr-4 text-right">CPC</th>
+                      <th className="pb-2 pr-4 text-right">Volume</th>
+                      <th className="pb-2 text-right">Competition</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {product.keyword_analysis.results
+                      .sort((a, b) => b.search_volume - a.search_volume)
+                      .slice(0, 10)
+                      .map((kw, idx) => (
+                        <tr key={idx} className="border-b border-gray-100">
+                          <td className="py-1.5 pr-4 font-medium">{kw.keyword}</td>
+                          <td className="py-1.5 pr-4 text-right font-mono">
+                            ${kw.cpc.toFixed(2)}
+                          </td>
+                          <td className="py-1.5 pr-4 text-right font-mono">
+                            {kw.search_volume.toLocaleString()}
+                          </td>
+                          <td className="py-1.5 text-right">
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${
+                              kw.competition === "HIGH" ? "bg-red-100 text-red-700" :
+                              kw.competition === "MEDIUM" ? "bg-yellow-100 text-yellow-700" :
+                              kw.competition === "LOW" ? "bg-green-100 text-green-700" :
+                              "bg-gray-100 text-gray-600"
+                            }`}>
+                              {kw.competition}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Supplier & Logistics */}
         <div className="mb-6 grid gap-4 md:grid-cols-2">

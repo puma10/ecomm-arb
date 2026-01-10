@@ -126,6 +126,7 @@ async def save_scores(
                 existing.selling_price = Decimal(str(product.selling_price))
                 existing.category = product.category.value
                 existing.estimated_cpc = Decimal(str(product.estimated_cpc))
+                existing.monthly_search_volume = product.monthly_search_volume
             saved.append(existing)
         else:
             # Create new record
@@ -137,6 +138,7 @@ async def save_scores(
                 selling_price=Decimal(str(product.selling_price)) if product else Decimal("0"),
                 category=product.category.value if product else "unknown",
                 estimated_cpc=Decimal(str(product.estimated_cpc)) if product else Decimal("0"),
+                monthly_search_volume=product.monthly_search_volume if product else 1000,
                 cogs=Decimal(str(score.cogs)),
                 gross_margin=Decimal(str(score.gross_margin)),
                 net_margin=Decimal(str(score.net_margin)),

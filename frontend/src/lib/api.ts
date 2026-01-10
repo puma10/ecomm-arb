@@ -239,10 +239,52 @@ export async function getScoredProducts(params?: {
   };
 }
 
+export interface KeywordResult {
+  keyword: string;
+  cpc: number;
+  search_volume: number;
+  competition: string;
+}
+
+export interface KeywordAnalysis {
+  keywords_searched: string[];
+  results: KeywordResult[];
+  best_keyword: string | null;
+}
+
+export interface AmazonSearchResult {
+  asin: string;
+  title: string;
+  price: number | null;
+  original_price: number | null;
+  review_count: number;
+  rating: number | null;
+  is_prime: boolean;
+  is_sponsored: boolean;
+  position: number;
+}
+
+export interface AmazonSearchResults {
+  keyword: string;
+  products: AmazonSearchResult[];
+  total_results: number | null;
+  median_price: number | null;
+  min_price: number | null;
+  avg_review_count: number;
+}
+
 export interface ScoredProductFull extends ScoredProduct {
   product_cost: number;
   shipping_cost: number;
   estimated_cpc: number;
+  monthly_search_volume: number | null;
+  keyword_analysis: KeywordAnalysis | null;
+  // Amazon competitor data
+  amazon_median_price: number | null;
+  amazon_min_price: number | null;
+  amazon_avg_review_count: number | null;
+  amazon_prime_percentage: number | null;
+  amazon_search_results: AmazonSearchResults | null;
   max_cpc: number;
   cpc_buffer: number;
   passed_filters: boolean;
@@ -273,6 +315,12 @@ export async function getScoredProduct(id: string): Promise<ScoredProductFull> {
     rank_score: data.rank_score ? Number(data.rank_score) : null,
     rejection_reasons: data.rejection_reasons || [],
     point_breakdown: data.point_breakdown || null,
+    // Amazon data
+    amazon_median_price: data.amazon_median_price ? Number(data.amazon_median_price) : null,
+    amazon_min_price: data.amazon_min_price ? Number(data.amazon_min_price) : null,
+    amazon_avg_review_count: data.amazon_avg_review_count ?? null,
+    amazon_prime_percentage: data.amazon_prime_percentage ? Number(data.amazon_prime_percentage) : null,
+    amazon_search_results: data.amazon_search_results || null,
   };
 }
 

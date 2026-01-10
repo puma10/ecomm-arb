@@ -209,6 +209,7 @@ async def discover_products(
 
             # Get real CPC data if available
             cpc_estimates: dict[str, float] = {}
+            search_volume_estimates: dict[str, int] = {}
             if google_ads_client and product_keywords:
                 try:
                     # Limit to 20 keywords per API call
@@ -216,6 +217,7 @@ async def discover_products(
                     estimates = google_ads_client.get_keyword_cpc_estimates(unique_keywords)
                     for est in estimates:
                         cpc_estimates[est.keyword.lower()] = float(est.avg_cpc)
+                        search_volume_estimates[est.keyword.lower()] = est.avg_monthly_searches
                 except Exception as e:
                     logger.warning(f"Could not fetch CPC for '{keyword}': {e}")
 
@@ -310,13 +312,14 @@ async def discover_products(
                     # Ensure minimum price
                     selling_price = max(selling_price, float(scoring_config.min_selling_price))
 
-                    # Get CPC estimate
+                    # Get CPC estimate and search volume
                     clean_name = cj_prod.name.lower()
                     for prefix in ["premium", "professional", "deluxe", "ultra", "smart"]:
                         clean_name = clean_name.replace(prefix, "")
                     clean_name = clean_name.strip()[:50]
 
                     estimated_cpc = cpc_estimates.get(clean_name, 0.50)  # Default fallback
+                    search_volume = search_volume_estimates.get(clean_name, 1000)  # Default fallback
 
                     # Map CJ category to our categories
                     category = _map_cj_category(cj_prod.category_name)
@@ -351,7 +354,7 @@ async def discover_products(
                         shipping_days_max=ship_days_max,
                         has_fast_shipping=has_fast,
                         estimated_cpc=estimated_cpc,
-                        monthly_search_volume=1000,
+                        monthly_search_volume=search_volume,
                         amazon_prime_exists=False,
                         amazon_review_count=0,
                         source="cj_dropshipping",
@@ -376,6 +379,7 @@ async def discover_products(
                         selling_price=Decimal(str(selling_price)),
                         category=category.value,
                         estimated_cpc=Decimal(str(estimated_cpc)),
+                        monthly_search_volume=search_volume,
                         # CJ logistics data
                         weight_grams=int(cj_prod.weight) if cj_prod.weight else None,
                         shipping_days_min=ship_days_min,
@@ -621,6 +625,7 @@ async def seed_demo_products(
             selling_price=Decimal(str(product.selling_price)),
             category=category.value,
             estimated_cpc=Decimal(str(product.estimated_cpc)),
+            monthly_search_volume=product.monthly_search_volume,
             cogs=Decimal(str(score.cogs)),
             gross_margin=Decimal(str(score.gross_margin)),
             net_margin=Decimal(str(score.net_margin)),
@@ -756,6 +761,182 @@ async def get_keyword_cpc(
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching CPC data: {str(e)}",
+        )
+
+
+class EnrichSearchVolumeRequest(BaseModel):
+    """Request to enrich products with search volume data."""
+
+    limit: int = Field(default=10, description="Number of products to enrich")
+
+
+class EnrichSearchVolumeResponse(BaseModel):
+    """Response with enrichment results."""
+
+    status: str
+    enriched: int
+    message: str
+
+
+@router.post("/enrich-search-volume", response_model=EnrichSearchVolumeResponse)
+async def enrich_search_volume(
+    request: EnrichSearchVolumeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> EnrichSearchVolumeResponse:
+    """Enrich products with keyword analysis using AI + Google Ads.
+
+    1. Uses Claude CLI to extract relevant search keywords from product names
+    2. Gets CPC and search volume for each keyword from Google Ads
+    3. Stores the full keyword analysis and picks the best keyword metrics
+    """
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+    from sqlalchemy import select
+
+    from ecom_arb.integrations.google_ads import GoogleAdsClient, GoogleAdsConfig, GoogleAdsError
+
+    # Load .env file
+    env_file = Path(__file__).parent.parent.parent.parent.parent / ".env"
+    load_dotenv(env_file)
+
+    # Check for required environment variables
+    required_vars = [
+        "GOOGLE_ADS_CLIENT_ID",
+        "GOOGLE_ADS_CLIENT_SECRET",
+        "GOOGLE_ADS_REFRESH_TOKEN",
+        "GOOGLE_ADS_DEVELOPER_TOKEN",
+        "GOOGLE_ADS_CUSTOMER_ID",
+    ]
+
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing credentials: {', '.join(missing)}",
+        )
+
+    def ask_claude(prompt: str) -> str:
+        """Call Claude CLI to get a response."""
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--output-format", "text"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return result.stdout.strip()
+
+    try:
+        # Initialize Google Ads client
+        gads_config = GoogleAdsConfig(
+            client_id=os.getenv("GOOGLE_ADS_CLIENT_ID", ""),
+            client_secret=os.getenv("GOOGLE_ADS_CLIENT_SECRET", ""),
+            refresh_token=os.getenv("GOOGLE_ADS_REFRESH_TOKEN", ""),
+            developer_token=os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", ""),
+            customer_id=os.getenv("GOOGLE_ADS_CUSTOMER_ID", ""),
+        )
+        gads_client = GoogleAdsClient(gads_config)
+
+        # Get the most recent products
+        result = await db.execute(
+            select(ScoredProduct)
+            .order_by(ScoredProduct.created_at.desc())
+            .limit(request.limit)
+        )
+        products = result.scalars().all()
+
+        if not products:
+            return EnrichSearchVolumeResponse(
+                status="success",
+                enriched=0,
+                message="No products to enrich",
+            )
+
+        enriched = 0
+
+        for product in products:
+            # Step 1: Use AI to extract keywords
+            prompt = f"""Extract 3-5 Google Ads search keywords that a US shopper would use to find this product.
+Focus on keywords that would have search volume - generic terms people actually search for.
+
+Product: {product.name}
+Category: {product.category}
+
+Return ONLY a JSON array of keywords, nothing else. Example: ["keyword1", "keyword2", "keyword3"]"""
+
+            response = ask_claude(prompt)
+
+            try:
+                # Extract JSON from response (may have extra text)
+                import re
+                json_match = re.search(r'\[.*?\]', response, re.DOTALL)
+                if json_match:
+                    keywords = json.loads(json_match.group())
+                else:
+                    keywords = [product.name[:50]]
+                if not isinstance(keywords, list):
+                    keywords = [product.name[:50]]
+            except (json.JSONDecodeError, AttributeError):
+                keywords = [product.name[:50]]
+
+            # Step 2: Get CPC and volume from Google Ads
+            estimates = gads_client.get_keyword_cpc_estimates(keywords[:5])
+
+            # Step 3: Build keyword analysis
+            keyword_data = []
+            best_cpc = 0.0
+            best_volume = 0
+
+            for est in estimates:
+                kw_info = {
+                    "keyword": est.keyword,
+                    "cpc": float(est.avg_cpc),
+                    "search_volume": est.avg_monthly_searches,
+                    "competition": est.competition,
+                }
+                keyword_data.append(kw_info)
+
+                # Track the keyword with highest search volume
+                if est.avg_monthly_searches > best_volume:
+                    best_volume = est.avg_monthly_searches
+                    best_cpc = float(est.avg_cpc)
+
+            # Step 4: Update product
+            product.keyword_analysis = {
+                "keywords_searched": keywords,
+                "results": keyword_data,
+                "best_keyword": max(keyword_data, key=lambda x: x["search_volume"])["keyword"] if keyword_data else None,
+            }
+            product.estimated_cpc = Decimal(str(best_cpc)) if best_cpc > 0 else product.estimated_cpc
+            product.monthly_search_volume = best_volume if best_volume > 0 else product.monthly_search_volume
+
+            enriched += 1
+
+        await db.commit()
+
+        return EnrichSearchVolumeResponse(
+            status="success",
+            enriched=enriched,
+            message=f"Enriched {enriched}/{len(products)} products with AI keyword analysis",
+        )
+
+    except GoogleAdsError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Google Ads API error: {str(e)}",
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=500,
+            detail="Claude CLI timed out",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error enriching products: {str(e)}",
         )
 
 
@@ -911,4 +1092,127 @@ def settings_to_scoring_config(settings: ScoringSettings) -> ScoringConfig:
         max_amazon_reviews_for_competition=settings.max_amazon_reviews_for_competition,
         min_cpc_buffer=float(settings.min_cpc_buffer),
         max_weight_grams=settings.max_weight_grams,
+    )
+
+
+# ============================================================================
+# Amazon Price Enrichment
+# ============================================================================
+
+
+class EnrichAmazonRequest(BaseModel):
+    """Request to enrich products with Amazon pricing data."""
+
+    product_ids: list[str] | None = Field(
+        None, description="Specific product IDs to enrich. If None, enriches recent products."
+    )
+    limit: int = Field(default=10, ge=1, le=50, description="Number of products to enrich")
+
+
+class EnrichAmazonResponse(BaseModel):
+    """Response from Amazon enrichment."""
+
+    status: str
+    submitted: int
+    message: str
+
+
+@router.post("/enrich-amazon-prices", response_model=EnrichAmazonResponse)
+async def enrich_amazon_prices(
+    request: EnrichAmazonRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> EnrichAmazonResponse:
+    """Fetch Amazon competitor pricing directly using US residential proxy.
+
+    This endpoint:
+    1. Gets products that need Amazon pricing
+    2. Extracts the best keyword from keyword_analysis
+    3. Fetches Amazon search results directly with US proxy (guaranteed USD pricing)
+    4. Updates product with Amazon pricing data immediately
+
+    Use the product_ids parameter to enrich specific products,
+    or leave empty to enrich the most recent products without Amazon data.
+    """
+    from sqlalchemy import desc, select
+
+    from ecom_arb.services.amazon_parser import scrape_amazon_direct, AmazonParserError
+
+    limit = request.limit if request else 10
+
+    # Build query for products to enrich
+    query = select(ScoredProduct)
+
+    if request and request.product_ids:
+        # Specific products requested
+        from uuid import UUID
+        uuids = [UUID(pid) for pid in request.product_ids]
+        query = query.where(ScoredProduct.id.in_(uuids))
+    else:
+        # Get recent products without Amazon data that have keyword analysis
+        query = query.where(
+            ScoredProduct.amazon_median_price.is_(None),
+            ScoredProduct.keyword_analysis.isnot(None),
+        )
+
+    query = query.order_by(desc(ScoredProduct.created_at)).limit(limit)
+
+    result = await db.execute(query)
+    products = result.scalars().all()
+
+    if not products:
+        return EnrichAmazonResponse(
+            status="no_products",
+            submitted=0,
+            message="No products found that need Amazon enrichment",
+        )
+
+    enriched = 0
+    for product in products:
+        # Get best keyword from keyword_analysis
+        keyword = None
+        if product.keyword_analysis:
+            keyword = product.keyword_analysis.get("best_keyword")
+            if not keyword:
+                # Fall back to first keyword searched
+                keywords_searched = product.keyword_analysis.get("keywords_searched", [])
+                if keywords_searched:
+                    keyword = keywords_searched[0]
+
+        if not keyword:
+            # Fall back to product name
+            keyword = product.name[:50]
+
+        # Fetch Amazon search results directly with US proxy
+        try:
+            results = await scrape_amazon_direct(keyword)
+
+            # Update product with Amazon pricing data
+            if results.products:
+                product.amazon_median_price = results.median_price
+                product.amazon_min_price = results.min_price
+                product.amazon_max_price = results.max_price
+                product.amazon_avg_price = results.avg_price
+                product.amazon_review_count = results.avg_review_count
+                product.amazon_prime_exists = results.prime_percentage > 0.3  # 30%+ Prime = competition
+                product.amazon_result_count = results.total_results or len(results.products)
+
+                enriched += 1
+                logger.info(
+                    f"Enriched product {product.id}: median=${results.median_price}, "
+                    f"min=${results.min_price}, max=${results.max_price}, "
+                    f"reviews={results.avg_review_count}, prime={results.prime_percentage:.0%}"
+                )
+            else:
+                logger.warning(f"No Amazon results for product {product.id}: {keyword}")
+
+        except AmazonParserError as e:
+            logger.error(f"Failed to fetch Amazon data for {product.id}: {e}")
+
+    # Commit all updates
+    await db.commit()
+
+    return EnrichAmazonResponse(
+        status="enriched",
+        submitted=enriched,
+        message=f"Enriched {enriched} products with Amazon pricing data (USD).",
     )

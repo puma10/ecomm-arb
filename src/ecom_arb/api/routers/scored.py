@@ -91,6 +91,15 @@ class ScoredProductResponse(BaseModel):
     selling_price: Decimal
     category: str
     estimated_cpc: Decimal
+    monthly_search_volume: int | None
+    keyword_analysis: dict[str, Any] | None
+
+    # Amazon competitor data
+    amazon_median_price: Decimal | None
+    amazon_min_price: Decimal | None
+    amazon_avg_review_count: int | None
+    amazon_prime_percentage: Decimal | None
+    amazon_search_results: dict[str, Any] | None
 
     # Shipping/logistics data (from supplier)
     weight_grams: int | None

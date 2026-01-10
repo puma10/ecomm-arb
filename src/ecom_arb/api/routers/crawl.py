@@ -892,6 +892,7 @@ async def crawl_webhook(
     """Receive SerpWatch postback with scraped HTML.
 
     This endpoint processes results from SerpWatch:
+    - For Amazon requests: routes to Amazon handler
     - For search results: extracts product URLs and adds them to queue
     - For product pages: parses product data, filters, scores, and stores
     - Updates queue item status and schedules next submission
@@ -900,6 +901,51 @@ async def crawl_webhook(
     Heavy processing is done in background tasks.
     """
     logger.info(f"Received webhook payload: {payload.get('status', 'unknown')}")
+
+    # Check if this is an Amazon request and forward to Amazon handler
+    results_peek = parse_webhook_payload(payload)
+    if results_peek:
+        first_post_id = results_peek[0].post_id
+        if first_post_id and "-amazon-" in first_post_id:
+            logger.info(f"Detected Amazon webhook, forwarding to Amazon handler")
+            from ecom_arb.api.routers.amazon import amazon_webhook, parse_amazon_post_id
+            from fastapi import Request
+            from starlette.requests import Request as StarletteRequest
+
+            # Process Amazon results
+            for result in results_peek:
+                parsed = parse_amazon_post_id(result.post_id)
+                if not parsed:
+                    logger.warning(f"Invalid Amazon post_id: {result.post_id}")
+                    continue
+
+                product_id, url_type, index = parsed
+
+                if not result.success or not result.html_url:
+                    logger.warning(f"Amazon fetch failed: {result.error}")
+                    continue
+
+                # Get keyword from product
+                from ecom_arb.db.models import ScoredProduct
+                from uuid import UUID
+                stmt = select(ScoredProduct).where(ScoredProduct.id == UUID(product_id))
+                db_result = await db.execute(stmt)
+                product = db_result.scalar_one_or_none()
+
+                keyword = "unknown"
+                if product and product.keyword_analysis:
+                    keyword = product.keyword_analysis.get("best_keyword", "unknown")
+
+                # Process in background
+                from ecom_arb.api.routers.amazon import process_amazon_results
+                background_tasks.add_task(
+                    process_amazon_results,
+                    product_id,
+                    result.html_url,
+                    keyword,
+                )
+
+            return WebhookResponse(status="ok", message=f"Forwarded {len(results_peek)} Amazon result(s)")
 
     # Parse webhook payload
     results = parse_webhook_payload(payload)
@@ -1242,6 +1288,7 @@ async def _process_product_result(
                 selling_price=Decimal(str(selling_price)),
                 category=category.value,
                 estimated_cpc=Decimal("0.50"),
+                monthly_search_volume=1000,  # Default until Google Ads lookup
                 weight_grams=product_data.weight_min,
                 shipping_days_min=ship_min,
                 shipping_days_max=ship_max,
@@ -1657,6 +1704,7 @@ async def _process_product_result_queued(
                 selling_price=Decimal(str(selling_price)),
                 category=category.value,
                 estimated_cpc=Decimal("0.50"),
+                monthly_search_volume=1000,  # Default until Google Ads lookup
                 weight_grams=product_data.weight_min,
                 shipping_days_min=ship_min,
                 shipping_days_max=ship_max,

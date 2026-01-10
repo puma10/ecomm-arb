@@ -19,7 +19,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 from fastapi.middleware.cors import CORSMiddleware
 
-from ecom_arb.api.routers import admin, checkout, crawl, exclusions, orders, products, scored
+from ecom_arb.api.routers import admin, amazon, checkout, crawl, exclusions, orders, products, scored
 from ecom_arb.config import get_settings
 from ecom_arb.db.base import Base, engine
 
@@ -62,6 +62,7 @@ app.include_router(checkout.router, prefix=settings.api_prefix)
 app.include_router(orders.router, prefix=settings.api_prefix)
 app.include_router(admin.router, prefix=settings.api_prefix)
 app.include_router(crawl.router, prefix=settings.api_prefix)
+app.include_router(amazon.router, prefix=settings.api_prefix)
 app.include_router(exclusions.router, prefix=settings.api_prefix)
 
 

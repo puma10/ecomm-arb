@@ -124,6 +124,15 @@ class ScoredProduct(Base):
 
     # Market data
     estimated_cpc: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    monthly_search_volume: Mapped[int | None] = mapped_column(nullable=True)
+    keyword_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    # Amazon competitor data
+    amazon_median_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    amazon_min_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    amazon_avg_review_count: Mapped[int | None] = mapped_column(nullable=True)
+    amazon_prime_percentage: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    amazon_search_results: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # Shipping/logistics data (from supplier)
     weight_grams: Mapped[int | None] = mapped_column(nullable=True)

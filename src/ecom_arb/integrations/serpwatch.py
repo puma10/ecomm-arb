@@ -52,6 +52,7 @@ async def submit_url(
     url_type: str,
     index: int,
     device: str = "desktop",
+    iso_code: str | None = None,
 ) -> SerpWatchSubmitResponse:
     """Submit a URL to SerpWatch Browser API for fetching.
 
@@ -61,6 +62,7 @@ async def submit_url(
         url_type: Type of URL - "search" or "product"
         index: Index number for tracking multiple URLs
         device: Device type for browser emulation (default: desktop)
+        iso_code: Optional ISO country code for geo-targeting (e.g., "US")
 
     Returns:
         SerpWatchSubmitResponse with success status and request_id
@@ -78,6 +80,10 @@ async def submit_url(
         "postback_url": postback_url,
         "post_id": post_id,
     }
+
+    # Add iso_code for geo-targeting if specified
+    if iso_code:
+        payload["iso_code"] = iso_code
 
     logger.info(f"Submitting URL to SerpWatch: {url} (post_id={post_id})")
 
