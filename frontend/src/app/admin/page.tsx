@@ -955,7 +955,9 @@ function ProductDetailModal({
                 <div className="flex justify-between">
                   <span className="text-gray-600">Best Keyword</span>
                   <span className="font-medium text-blue-600">
-                    {product.keyword_analysis.best_keyword}
+                    {typeof product.keyword_analysis.best_keyword === 'string'
+                      ? product.keyword_analysis.best_keyword
+                      : product.keyword_analysis.best_keyword.keyword}
                   </span>
                 </div>
               )}

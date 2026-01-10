@@ -249,7 +249,7 @@ export interface KeywordResult {
 export interface KeywordAnalysis {
   keywords_searched: string[];
   results: KeywordResult[];
-  best_keyword: string | null;
+  best_keyword: string | { keyword: string; volume: number; cpc: number; relevance: number } | null;
 }
 
 export interface AmazonSearchResult {
