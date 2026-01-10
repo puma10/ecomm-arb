@@ -757,14 +757,24 @@ function ProductDetailModal({
               </div>
 
               {/* Top Keywords */}
-              {analysis.keyword_analysis.top_opportunities.length > 0 && (
+              {analysis.keyword_analysis.exploration?.top_opportunities?.length > 0 && (
                 <div className="rounded-lg bg-white border p-4">
                   <h5 className="font-medium text-gray-800 mb-3">
                     Top Keyword Opportunities
                     <span className="ml-2 text-sm text-gray-500 font-normal">
-                      ({analysis.keyword_analysis.total_keywords} found)
+                      ({analysis.keyword_analysis.exploration.total_keywords} found)
                     </span>
                   </h5>
+                  {analysis.keyword_analysis.best_keyword && (
+                    <div className="mb-3 p-2 bg-purple-50 rounded border border-purple-200">
+                      <span className="text-sm text-purple-700">
+                        <strong>Best:</strong> {analysis.keyword_analysis.best_keyword.keyword}
+                        {" "}&middot;{" "}{analysis.keyword_analysis.best_keyword.volume.toLocaleString()}/mo
+                        {" "}&middot;{" "}${analysis.keyword_analysis.best_keyword.cpc.toFixed(2)} CPC
+                        {" "}&middot;{" "}{analysis.keyword_analysis.best_keyword.relevance}% relevance
+                      </span>
+                    </div>
+                  )}
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
@@ -777,7 +787,7 @@ function ProductDetailModal({
                         </tr>
                       </thead>
                       <tbody>
-                        {analysis.keyword_analysis.top_opportunities.slice(0, 5).map((kw, idx) => (
+                        {analysis.keyword_analysis.exploration.top_opportunities.slice(0, 5).map((kw, idx) => (
                           <tr key={idx} className="border-b border-gray-100">
                             <td className="py-1.5 pr-4 font-medium">{kw.keyword}</td>
                             <td className="py-1.5 pr-4 text-right font-mono">

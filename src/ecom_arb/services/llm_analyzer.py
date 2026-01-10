@@ -128,12 +128,20 @@ async def _call_openrouter(
             content = content[:-3]
         content = content.strip()
 
-        # Parse JSON from response
+        # Parse JSON from response - try to find JSON object in text
         try:
             return json.loads(content)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
+            # Try to extract JSON from text (model might include preamble)
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                try:
+                    return json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
             logger.error(f"Failed to parse LLM response as JSON: {content[:500]}")
-            raise Exception(f"Invalid JSON response from LLM: {e}")
+            raise Exception(f"Invalid JSON response from LLM: content={content[:200]}")
 
 
 async def analyze_product(

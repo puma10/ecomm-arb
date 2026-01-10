@@ -661,7 +661,7 @@ export interface KeywordOpportunity {
   tier: string;
 }
 
-export interface KeywordExploration {
+export interface KeywordExplorationDetails {
   total_keywords: number;
   total_explored: number;
   depth_reached: number;
@@ -672,6 +672,21 @@ export interface KeywordExploration {
     specific: KeywordOpportunity[];
     broad: KeywordOpportunity[];
   };
+}
+
+export interface KeywordAnalysisResult {
+  seed_keywords: {
+    exact: string[];
+    specific: string[];
+    broad: string[];
+  };
+  best_keyword: {
+    keyword: string;
+    volume: number;
+    cpc: number;
+    relevance: number;
+  } | null;
+  exploration: KeywordExplorationDetails;
 }
 
 export interface AmazonMatch {
@@ -707,7 +722,7 @@ export interface ProductAnalysisResult {
   name: string;
   cost: number;
   product_understanding: ProductUnderstanding;
-  keyword_analysis: KeywordExploration;
+  keyword_analysis: KeywordAnalysisResult;
   amazon_analysis: AmazonAnalysis;
   viability: ViabilityAssessment;
 }

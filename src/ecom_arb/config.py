@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # OpenRouter for LLM analysis
     # Get key from https://openrouter.ai/
     openrouter_api_key: str = ""
-    openrouter_model: str = "anthropic/claude-sonnet-4"  # or claude-3.5-sonnet
+    openrouter_model: str = "anthropic/claude-3.5-haiku"  # cheaper alternative: claude-3.5-haiku
 
 
 @lru_cache
