@@ -787,7 +787,7 @@ function ProductDetailModal({
                         </tr>
                       </thead>
                       <tbody>
-                        {analysis.keyword_analysis.exploration.top_opportunities.slice(0, 5).map((kw, idx) => (
+                        {analysis.keyword_analysis.exploration.top_opportunities.slice(0, 10).map((kw, idx) => (
                           <tr key={idx} className="border-b border-gray-100">
                             <td className="py-1.5 pr-4 font-medium">{kw.keyword}</td>
                             <td className="py-1.5 pr-4 text-right font-mono">
