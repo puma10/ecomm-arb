@@ -270,6 +270,8 @@ export interface AmazonSearchResults {
   total_results: number | null;
   median_price: number | null;
   min_price: number | null;
+  max_price: number | null;
+  avg_price: number | null;
   avg_review_count: number;
 }
 
@@ -629,4 +631,97 @@ export async function deleteExclusionRule(id: string): Promise<void> {
     const error = await res.json();
     throw new Error(error.detail || "Failed to delete exclusion rule");
   }
+}
+
+// ============================================================================
+// LLM Product Analysis API
+// ============================================================================
+
+export interface ProductUnderstanding {
+  product_type: string;
+  style: string[];
+  materials: string[];
+  use_cases: string[];
+  buyer_persona: string;
+  quality_tier: string;
+  price_expectation: string;
+  seed_keywords: {
+    exact: string[];
+    specific: string[];
+    broad: string[];
+  };
+}
+
+export interface KeywordOpportunity {
+  keyword: string;
+  volume: number;
+  cpc: number;
+  relevance: number;
+  opportunity_score: number;
+  tier: string;
+}
+
+export interface KeywordExploration {
+  total_keywords: number;
+  total_explored: number;
+  depth_reached: number;
+  errors: string[];
+  top_opportunities: KeywordOpportunity[];
+  by_tier: {
+    exact: KeywordOpportunity[];
+    specific: KeywordOpportunity[];
+    broad: KeywordOpportunity[];
+  };
+}
+
+export interface AmazonMatch {
+  index: number;
+  title: string;
+  price: number;
+  reviews: number;
+  similarity: number;
+  reason: string;
+  asin?: string;
+}
+
+export interface AmazonAnalysis {
+  similar_products: AmazonMatch[];
+  market_price: {
+    weighted_median: number | null;
+    min: number | null;
+    max: number | null;
+  };
+  sample_size: number;
+}
+
+export interface ViabilityAssessment {
+  score: number;
+  pros: string[];
+  cons: string[];
+  recommendation: "launch" | "maybe" | "skip";
+  summary: string;
+}
+
+export interface ProductAnalysisResult {
+  product_id: string;
+  name: string;
+  cost: number;
+  product_understanding: ProductUnderstanding;
+  keyword_analysis: KeywordExploration;
+  amazon_analysis: AmazonAnalysis;
+  viability: ViabilityAssessment;
+}
+
+export async function analyzeProduct(productId: string): Promise<ProductAnalysisResult> {
+  const res = await fetch(`${API_URL}/admin/analyze-product/${productId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to analyze product");
+  }
+
+  return res.json();
 }

@@ -16,9 +16,11 @@ import {
   updateScoringSettings,
   discoverProducts,
   getCrawlJobs,
+  analyzeProduct,
   ScoredProduct,
   ScoredProductFull,
   ScoringSettings,
+  ProductAnalysisResult,
 } from "@/lib/api";
 
 const RECOMMENDATIONS = ["STRONG BUY", "VIABLE", "MARGINAL", "WEAK", "REJECT"];
@@ -514,8 +516,25 @@ function ProductDetailModal({
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
 }) {
+  const [analysis, setAnalysis] = useState<ProductAnalysisResult | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
   const profit = product.selling_price - product.cogs;
   const adCostPerSale = product.estimated_cpc / 0.01; // Assuming 1% CVR
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      const result = await analyzeProduct(product.id);
+      setAnalysis(result);
+    } catch (err) {
+      setAnalysisError(err instanceof Error ? err.message : "Analysis failed");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   return (
     <div
@@ -605,6 +624,240 @@ function ProductDetailModal({
               </div>
             )}
           </div>
+        </div>
+
+        {/* LLM Analysis Section */}
+        <div className="mb-6 rounded-lg border bg-purple-50 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold text-purple-800 flex items-center gap-2">
+              <span className="text-lg">🤖</span> AI Product Analysis
+            </h4>
+            {!analysis && (
+              <button
+                onClick={handleAnalyze}
+                disabled={analyzing}
+                className="rounded-md bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {analyzing ? (
+                  <>
+                    <span className="animate-spin">⏳</span>
+                    Analyzing... (~60s)
+                  </>
+                ) : (
+                  <>
+                    <span>🔍</span>
+                    Analyze with AI
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          {analysisError && (
+            <div className="rounded-md bg-red-100 border border-red-200 p-3 text-sm text-red-700">
+              <strong>Error:</strong> {analysisError}
+            </div>
+          )}
+
+          {analyzing && !analysis && (
+            <div className="text-center py-8">
+              <div className="inline-block animate-pulse">
+                <div className="text-4xl mb-2">🧠</div>
+                <p className="text-purple-700 font-medium">Analyzing product...</p>
+                <p className="text-sm text-purple-600 mt-1">
+                  LLM understanding → Keyword research → Amazon comparison → Viability scoring
+                </p>
+              </div>
+            </div>
+          )}
+
+          {analysis && (
+            <div className="space-y-4">
+              {/* Viability Score Banner */}
+              <div className={`rounded-lg p-4 ${
+                analysis.viability.recommendation === "launch" ? "bg-green-100 border border-green-300" :
+                analysis.viability.recommendation === "maybe" ? "bg-yellow-100 border border-yellow-300" :
+                "bg-red-100 border border-red-300"
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h5 className={`font-bold text-lg ${
+                      analysis.viability.recommendation === "launch" ? "text-green-800" :
+                      analysis.viability.recommendation === "maybe" ? "text-yellow-800" :
+                      "text-red-800"
+                    }`}>
+                      {analysis.viability.recommendation === "launch" ? "🚀 LAUNCH" :
+                       analysis.viability.recommendation === "maybe" ? "🤔 MAYBE" :
+                       "❌ SKIP"}
+                    </h5>
+                    <p className="text-sm mt-1 text-gray-700">{analysis.viability.summary}</p>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-3xl font-bold ${
+                      analysis.viability.score >= 70 ? "text-green-700" :
+                      analysis.viability.score >= 40 ? "text-yellow-700" :
+                      "text-red-700"
+                    }`}>
+                      {analysis.viability.score}
+                    </div>
+                    <div className="text-xs text-gray-500">viability score</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pros & Cons */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-lg bg-green-50 p-3">
+                  <h5 className="font-medium text-green-800 mb-2">✅ Pros</h5>
+                  <ul className="space-y-1 text-sm text-green-700">
+                    {analysis.viability.pros.map((pro, i) => (
+                      <li key={i}>• {pro}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="rounded-lg bg-red-50 p-3">
+                  <h5 className="font-medium text-red-800 mb-2">❌ Cons</h5>
+                  <ul className="space-y-1 text-sm text-red-700">
+                    {analysis.viability.cons.map((con, i) => (
+                      <li key={i}>• {con}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              {/* Product Understanding */}
+              <div className="rounded-lg bg-white border p-4">
+                <h5 className="font-medium text-gray-800 mb-3">Product Understanding</h5>
+                <div className="grid gap-3 md:grid-cols-2 text-sm">
+                  <div>
+                    <span className="text-gray-500">Type:</span>{" "}
+                    <span className="font-medium">{analysis.product_understanding.product_type}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Quality:</span>{" "}
+                    <span className="font-medium capitalize">{analysis.product_understanding.quality_tier}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Price Expectation:</span>{" "}
+                    <span className="font-medium">{analysis.product_understanding.price_expectation}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Buyer:</span>{" "}
+                    <span className="font-medium">{analysis.product_understanding.buyer_persona}</span>
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-gray-500">Style:</span>{" "}
+                    <span className="font-medium">{analysis.product_understanding.style.join(", ")}</span>
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-gray-500">Use Cases:</span>{" "}
+                    <span className="font-medium">{analysis.product_understanding.use_cases.join(", ")}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Top Keywords */}
+              {analysis.keyword_analysis.top_opportunities.length > 0 && (
+                <div className="rounded-lg bg-white border p-4">
+                  <h5 className="font-medium text-gray-800 mb-3">
+                    Top Keyword Opportunities
+                    <span className="ml-2 text-sm text-gray-500 font-normal">
+                      ({analysis.keyword_analysis.total_keywords} found)
+                    </span>
+                  </h5>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-gray-600">
+                          <th className="pb-2 pr-4">Keyword</th>
+                          <th className="pb-2 pr-4 text-right">Volume</th>
+                          <th className="pb-2 pr-4 text-right">CPC</th>
+                          <th className="pb-2 pr-4 text-right">Relevance</th>
+                          <th className="pb-2 text-right">Score</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analysis.keyword_analysis.top_opportunities.slice(0, 5).map((kw, idx) => (
+                          <tr key={idx} className="border-b border-gray-100">
+                            <td className="py-1.5 pr-4 font-medium">{kw.keyword}</td>
+                            <td className="py-1.5 pr-4 text-right font-mono">
+                              {kw.volume.toLocaleString()}
+                            </td>
+                            <td className="py-1.5 pr-4 text-right font-mono">
+                              ${kw.cpc.toFixed(2)}
+                            </td>
+                            <td className="py-1.5 pr-4 text-right">
+                              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                kw.relevance >= 80 ? "bg-green-100 text-green-700" :
+                                kw.relevance >= 60 ? "bg-yellow-100 text-yellow-700" :
+                                "bg-gray-100 text-gray-600"
+                              }`}>
+                                {kw.relevance}%
+                              </span>
+                            </td>
+                            <td className="py-1.5 text-right font-mono font-bold text-purple-600">
+                              {kw.opportunity_score.toFixed(1)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Market Price Comparison */}
+              {analysis.amazon_analysis.market_price.weighted_median && (
+                <div className="rounded-lg bg-white border p-4">
+                  <h5 className="font-medium text-gray-800 mb-3">
+                    Amazon Market Price
+                    <span className="ml-2 text-sm text-gray-500 font-normal">
+                      ({analysis.amazon_analysis.sample_size} similar products)
+                    </span>
+                  </h5>
+                  <div className="grid gap-4 md:grid-cols-4 text-center">
+                    <div className="p-3 bg-gray-50 rounded">
+                      <div className="text-xs text-gray-500">Market Median</div>
+                      <div className="text-xl font-bold text-gray-800">
+                        ${analysis.amazon_analysis.market_price.weighted_median?.toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded">
+                      <div className="text-xs text-gray-500">Our Cost</div>
+                      <div className="text-xl font-bold text-gray-800">
+                        ${analysis.cost.toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded">
+                      <div className="text-xs text-gray-500">Potential Margin</div>
+                      <div className={`text-xl font-bold ${
+                        analysis.amazon_analysis.market_price.weighted_median &&
+                        (analysis.amazon_analysis.market_price.weighted_median - analysis.cost) / analysis.amazon_analysis.market_price.weighted_median > 0.4
+                          ? "text-green-600" : "text-red-600"
+                      }`}>
+                        {analysis.amazon_analysis.market_price.weighted_median
+                          ? `${(((analysis.amazon_analysis.market_price.weighted_median - analysis.cost) / analysis.amazon_analysis.market_price.weighted_median) * 100).toFixed(0)}%`
+                          : "-"}
+                      </div>
+                    </div>
+                    <div className="p-3 bg-gray-50 rounded">
+                      <div className="text-xs text-gray-500">Price Range</div>
+                      <div className="text-sm font-medium text-gray-700">
+                        ${analysis.amazon_analysis.market_price.min?.toFixed(2)} - ${analysis.amazon_analysis.market_price.max?.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!analysis && !analyzing && (
+            <p className="text-sm text-purple-600">
+              Click "Analyze with AI" to get LLM-powered insights including product understanding,
+              keyword opportunities from Google Ads, Amazon competitor analysis, and viability scoring.
+            </p>
+          )}
         </div>
 
         {/* Financial Analysis */}
