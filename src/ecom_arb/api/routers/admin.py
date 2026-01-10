@@ -1276,3 +1276,235 @@ async def enrich_amazon_prices(
         submitted=enriched,
         message=f"Enriched {enriched} products with Amazon pricing data (USD).",
     )
+
+
+# =============================================================================
+# LLM-BASED PRODUCT ANALYSIS
+# =============================================================================
+
+
+class AnalyzeProductRequest(BaseModel):
+    """Request to analyze a single product."""
+
+    product_id: str | None = None
+
+
+class AnalyzeProductsRequest(BaseModel):
+    """Request to analyze multiple products."""
+
+    product_ids: list[str] | None = None
+    limit: int = Field(default=5, ge=1, le=50)
+
+
+class ProductAnalysisResult(BaseModel):
+    """Result of product analysis."""
+
+    product_id: str
+    name: str
+    cost: float
+    product_understanding: dict
+    keyword_analysis: dict
+    amazon_analysis: dict
+    viability: dict
+
+
+class AnalyzeProductsResponse(BaseModel):
+    """Response from product analysis."""
+
+    status: str
+    analyzed: int
+    results: list[ProductAnalysisResult]
+
+
+@router.post("/analyze-product/{product_id}", response_model=ProductAnalysisResult)
+async def analyze_single_product(
+    product_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> ProductAnalysisResult:
+    """Analyze a single product using LLM.
+
+    Performs deep analysis:
+    1. LLM understands product (type, style, materials, buyer persona)
+    2. Generates seed keywords across specificity tiers
+    3. Searches Amazon and scores product similarity
+    4. Calculates market price from similar products
+    5. Generates viability assessment
+    """
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from ecom_arb.services.llm_analyzer import (
+        analyze_product,
+        compare_amazon_products,
+        generate_viability_assessment,
+    )
+    from ecom_arb.services.amazon_parser import scrape_amazon_direct
+
+    # Get the product
+    result = await db.execute(
+        select(ScoredProduct).where(ScoredProduct.id == UUID(product_id))
+    )
+    product = result.scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    logger.info(f"Analyzing product: {product.name}")
+
+    # Step 1: LLM product understanding
+    understanding = await analyze_product(
+        name=product.name,
+        weight_grams=product.weight_grams,
+        cost=float(product.product_cost),
+        category=product.category,
+    )
+
+    logger.info(f"Product type: {understanding.product_type}")
+
+    # Step 2: Search Amazon with best keyword
+    best_keyword = understanding.seed_keywords.get("specific", [""])[0]
+    if not best_keyword:
+        best_keyword = understanding.seed_keywords.get("broad", ["product"])[0]
+
+    logger.info(f"Searching Amazon for: {best_keyword}")
+    amazon_results = await scrape_amazon_direct(best_keyword)
+
+    # Convert to dict format
+    amazon_products = [
+        {
+            "title": p.title,
+            "price": float(p.price) if p.price else None,
+            "review_count": p.review_count,
+            "asin": p.asin,
+        }
+        for p in amazon_results.products
+        if not p.is_sponsored and p.price
+    ]
+
+    # Step 3: LLM compares Amazon products
+    amazon_analysis = await compare_amazon_products(understanding, amazon_products)
+
+    logger.info(f"Similar products: {amazon_analysis.sample_size}, Market price: ${amazon_analysis.market_price.get('weighted_median')}")
+
+    # Step 4: Generate viability assessment
+    viability = await generate_viability_assessment(
+        product_name=product.name,
+        cost=float(product.product_cost),
+        market_price=amazon_analysis.market_price,
+        best_keyword={
+            "keyword": best_keyword,
+            "volume": None,  # TODO: integrate Google Ads API
+            "cpc": None,
+            "relevance": 90,
+        },
+        keyword_count=len(understanding.seed_keywords.get("exact", [])) +
+                      len(understanding.seed_keywords.get("specific", [])) +
+                      len(understanding.seed_keywords.get("broad", [])),
+        amazon_match_count=amazon_analysis.sample_size,
+    )
+
+    # Step 5: Update database with analysis results
+    product.product_understanding = {
+        "product_type": understanding.product_type,
+        "style": understanding.style,
+        "materials": understanding.materials,
+        "use_cases": understanding.use_cases,
+        "buyer_persona": understanding.buyer_persona,
+        "quality_tier": understanding.quality_tier,
+        "price_expectation": understanding.price_expectation,
+    }
+
+    product.keyword_analysis = {
+        "seed_keywords": understanding.seed_keywords,
+        "best_keyword": best_keyword,
+        # TODO: Add explored keywords from Google Ads API
+    }
+
+    product.amazon_median_price = Decimal(str(amazon_analysis.market_price["weighted_median"])) if amazon_analysis.market_price.get("weighted_median") else None
+    product.amazon_min_price = Decimal(str(amazon_analysis.market_price["min"])) if amazon_analysis.market_price.get("min") else None
+    product.amazon_search_results = {
+        "comparison_method": "llm_semantic",
+        "sample_size": amazon_analysis.sample_size,
+        "market_price": amazon_analysis.market_price,
+        "similar_products": [
+            {
+                "title": m.title[:100],
+                "price": m.price,
+                "reviews": m.reviews,
+                "similarity": m.similarity,
+                "reason": m.reason,
+                "asin": m.asin,
+            }
+            for m in amazon_analysis.similar_products[:10]
+        ],
+    }
+
+    product.viability_score = viability.get("score", 50)
+    product.viability_reasons = viability
+
+    await db.commit()
+
+    return ProductAnalysisResult(
+        product_id=str(product.id),
+        name=product.name,
+        cost=float(product.product_cost),
+        product_understanding=product.product_understanding,
+        keyword_analysis=product.keyword_analysis,
+        amazon_analysis=product.amazon_search_results,
+        viability=viability,
+    )
+
+
+@router.post("/analyze-products", response_model=AnalyzeProductsResponse)
+async def analyze_multiple_products(
+    request: AnalyzeProductsRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> AnalyzeProductsResponse:
+    """Analyze multiple products using LLM.
+
+    If product_ids provided, analyzes those specific products.
+    Otherwise, analyzes products that haven't been analyzed yet.
+    """
+    from uuid import UUID
+
+    from sqlalchemy import desc, select
+
+    limit = request.limit if request else 5
+
+    # Build query
+    if request and request.product_ids:
+        uuids = [UUID(pid) for pid in request.product_ids]
+        query = select(ScoredProduct).where(ScoredProduct.id.in_(uuids))
+    else:
+        # Get products not yet analyzed (no product_understanding)
+        query = (
+            select(ScoredProduct)
+            .where(ScoredProduct.product_understanding.is_(None))
+            .order_by(desc(ScoredProduct.created_at))
+            .limit(limit)
+        )
+
+    result = await db.execute(query)
+    products = result.scalars().all()
+
+    if not products:
+        return AnalyzeProductsResponse(
+            status="no_products",
+            analyzed=0,
+            results=[],
+        )
+
+    results = []
+    for product in products:
+        try:
+            analysis = await analyze_single_product(str(product.id), db)
+            results.append(analysis)
+        except Exception as e:
+            logger.error(f"Failed to analyze product {product.id}: {e}")
+
+    return AnalyzeProductsResponse(
+        status="analyzed",
+        analyzed=len(results),
+        results=results,
+    )

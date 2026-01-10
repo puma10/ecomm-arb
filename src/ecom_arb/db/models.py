@@ -127,6 +127,11 @@ class ScoredProduct(Base):
     monthly_search_volume: Mapped[int | None] = mapped_column(nullable=True)
     keyword_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
+    # LLM Analysis
+    product_understanding: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    viability_score: Mapped[int | None] = mapped_column(nullable=True)
+    viability_reasons: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
     # Amazon competitor data
     amazon_median_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     amazon_min_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
