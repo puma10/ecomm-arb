@@ -1184,28 +1184,86 @@ async def enrich_amazon_prices(
 
         # Fetch Amazon search results directly with US proxy
         try:
+            from ecom_arb.services.spec_extractor import (
+                extract_specs,
+                filter_similar_products,
+                calculate_market_price,
+            )
+
             results = await scrape_amazon_direct(keyword)
 
-            # Update product with Amazon pricing data
-            if results.products:
+            if not results.products:
+                logger.warning(f"No Amazon results for product {product.id}: {keyword}")
+                continue
+
+            # Extract specs from CJ product
+            cj_specs = extract_specs(
+                title=product.name,
+                weight_grams=product.weight_grams,
+            )
+
+            # Convert Amazon products to dicts for comparison
+            amazon_products = [
+                {
+                    "title": p.title,
+                    "price": float(p.price) if p.price else None,
+                    "review_count": p.review_count,
+                    "rating": p.rating,
+                    "is_prime": p.is_prime,
+                    "asin": p.asin,
+                }
+                for p in results.products
+                if not p.is_sponsored  # Exclude sponsored
+            ]
+
+            # Filter to similar products (min 30% similarity)
+            similar = filter_similar_products(cj_specs, amazon_products, min_similarity=0.3)
+
+            # Calculate weighted market price
+            market = calculate_market_price(similar, weight_by_similarity=True, weight_by_reviews=True)
+
+            # If we have similar products, use weighted prices; otherwise fall back to all results
+            if market["sample_size"] >= 3:
+                product.amazon_median_price = Decimal(str(market["weighted_median"])) if market["weighted_median"] else None
+                product.amazon_min_price = Decimal(str(market["min"])) if market["min"] else None
+                sample_size = market["sample_size"]
+                comparison_method = "spec_similarity"
+            else:
+                # Fall back to all non-sponsored products
                 product.amazon_median_price = results.median_price
                 product.amazon_min_price = results.min_price
-                product.amazon_avg_review_count = results.avg_review_count
-                product.amazon_prime_percentage = Decimal(str(results.prime_percentage))
-                product.amazon_search_results = {
-                    "total_results": results.total_results or len(results.products),
-                    "avg_price": float(results.avg_price) if results.avg_price else None,
-                    "max_price": float(results.max_price) if results.max_price else None,
-                }
+                sample_size = len([p for p in results.products if not p.is_sponsored])
+                comparison_method = "keyword_only"
 
-                enriched += 1
-                logger.info(
-                    f"Enriched product {product.id}: median=${results.median_price}, "
-                    f"min=${results.min_price}, "
-                    f"reviews={results.avg_review_count}, prime={results.prime_percentage:.0%}"
-                )
-            else:
-                logger.warning(f"No Amazon results for product {product.id}: {keyword}")
+            product.amazon_avg_review_count = results.avg_review_count
+            product.amazon_prime_percentage = Decimal(str(results.prime_percentage))
+            product.amazon_search_results = {
+                "total_results": results.total_results or len(results.products),
+                "comparison_method": comparison_method,
+                "similar_products_found": market["sample_size"],
+                "weighted_avg": market["weighted_avg"],
+                "weighted_median": market["weighted_median"],
+                "max_price": market["max"] or (float(results.max_price) if results.max_price else None),
+                "cj_specs": {
+                    "product_type": cj_specs.product_type,
+                    "weight_grams": cj_specs.weight_grams,
+                    "features": cj_specs.features,
+                    "material": cj_specs.material,
+                    "power_source": cj_specs.power_source,
+                    "connectivity": cj_specs.connectivity,
+                },
+                "top_similar": [
+                    {"title": p["title"][:80], "price": p["price"], "similarity": round(sim, 2)}
+                    for p, _, sim in similar[:5]
+                ],
+            }
+
+            enriched += 1
+            logger.info(
+                f"Enriched product {product.id}: median=${product.amazon_median_price}, "
+                f"min=${product.amazon_min_price}, method={comparison_method}, "
+                f"similar={market['sample_size']}"
+            )
 
         except AmazonParserError as e:
             logger.error(f"Failed to fetch Amazon data for {product.id}: {e}")
