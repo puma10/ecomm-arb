@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # Get key from https://www.scraperapi.com/
     scraperapi_key: str = ""
 
+    # OpenRouter for LLM analysis
+    # Get key from https://openrouter.ai/
+    openrouter_api_key: str = ""
+    openrouter_model: str = "anthropic/claude-sonnet-4"  # or claude-3.5-sonnet
+
 
 @lru_cache
 def get_settings() -> Settings:
