@@ -1340,6 +1340,7 @@ async def analyze_single_product(
         generate_viability_assessment,
     )
     from ecom_arb.services.amazon_parser import scrape_amazon_direct
+    from ecom_arb.services.keyword_explorer import explore_product_keywords
 
     # Get the product
     result = await db.execute(
@@ -1362,10 +1363,28 @@ async def analyze_single_product(
 
     logger.info(f"Product type: {understanding.product_type}")
 
-    # Step 2: Search Amazon with best keyword
+    # Step 2: Explore keywords with Google Ads
+    # Note: Set max_depth=0 to skip Google Ads API and use LLM seed keywords only
+    # This is faster but won't have volume/CPC data
+    logger.info("Exploring keywords...")
+    keyword_exploration = await explore_product_keywords(
+        understanding,
+        max_depth=0,  # Skip Google Ads for now (TODO: enable when API is stable)
+        min_relevance=50,
+    )
+    logger.info(f"Explored {keyword_exploration.total_explored} keywords, found {len(keyword_exploration.keywords)}")
+
+    # Get best keyword for Amazon search
     best_keyword = understanding.seed_keywords.get("specific", [""])[0]
     if not best_keyword:
         best_keyword = understanding.seed_keywords.get("broad", ["product"])[0]
+
+    # If we have keyword data, use the best opportunity
+    if keyword_exploration.top_opportunities:
+        top_kw = keyword_exploration.top_opportunities[0]
+        if top_kw.relevance_score >= 70:
+            best_keyword = top_kw.keyword
+            logger.info(f"Using top keyword: {best_keyword} (vol: {top_kw.monthly_volume}, cpc: ${top_kw.avg_cpc:.2f})")
 
     logger.info(f"Searching Amazon for: {best_keyword}")
     amazon_results = await scrape_amazon_direct(best_keyword)
@@ -1388,19 +1407,30 @@ async def analyze_single_product(
     logger.info(f"Similar products: {amazon_analysis.sample_size}, Market price: ${amazon_analysis.market_price.get('weighted_median')}")
 
     # Step 4: Generate viability assessment
+    # Use best keyword from exploration if available
+    best_keyword_data = None
+    if keyword_exploration.top_opportunities:
+        top = keyword_exploration.top_opportunities[0]
+        best_keyword_data = {
+            "keyword": top.keyword,
+            "volume": top.monthly_volume,
+            "cpc": top.avg_cpc,
+            "relevance": top.relevance_score,
+        }
+    else:
+        best_keyword_data = {
+            "keyword": best_keyword,
+            "volume": None,
+            "cpc": None,
+            "relevance": 90,
+        }
+
     viability = await generate_viability_assessment(
         product_name=product.name,
         cost=float(product.product_cost),
         market_price=amazon_analysis.market_price,
-        best_keyword={
-            "keyword": best_keyword,
-            "volume": None,  # TODO: integrate Google Ads API
-            "cpc": None,
-            "relevance": 90,
-        },
-        keyword_count=len(understanding.seed_keywords.get("exact", [])) +
-                      len(understanding.seed_keywords.get("specific", [])) +
-                      len(understanding.seed_keywords.get("broad", [])),
+        best_keyword=best_keyword_data,
+        keyword_count=len(keyword_exploration.keywords),
         amazon_match_count=amazon_analysis.sample_size,
     )
 
@@ -1417,8 +1447,8 @@ async def analyze_single_product(
 
     product.keyword_analysis = {
         "seed_keywords": understanding.seed_keywords,
-        "best_keyword": best_keyword,
-        # TODO: Add explored keywords from Google Ads API
+        "best_keyword": best_keyword_data,
+        "exploration": keyword_exploration.to_dict(),
     }
 
     product.amazon_median_price = Decimal(str(amazon_analysis.market_price["weighted_median"])) if amazon_analysis.market_price.get("weighted_median") else None

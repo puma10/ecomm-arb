@@ -342,7 +342,7 @@ async def score_keyword_relevance(
     Returns:
         List of KeywordScore with relevance 0-100
     """
-    keyword_list = "\n".join(f"- {kw}" for kw in keywords[:30])  # Limit to 30
+    keyword_list = "\n".join(f"- {kw}" for kw in keywords[:15])  # Limit to 15
 
     messages = [
         {
@@ -379,7 +379,7 @@ Return JSON:
         },
     ]
 
-    result = await _call_openrouter(messages, temperature=0.2)
+    result = await _call_openrouter(messages, temperature=0.2, max_tokens=4000)
 
     scores = []
     for item in result.get("scores", []):
