@@ -16,11 +16,14 @@ import {
   updateScoringSettings,
   discoverProducts,
   getCrawlJobs,
+  getProductAnalysis,
   analyzeProduct,
+  deepKeywordExploration,
   ScoredProduct,
   ScoredProductFull,
   ScoringSettings,
   ProductAnalysisResult,
+  DeepKeywordResponse,
 } from "@/lib/api";
 
 const RECOMMENDATIONS = ["STRONG BUY", "VIABLE", "MARGINAL", "WEAK", "REJECT"];
@@ -519,6 +522,28 @@ function ProductDetailModal({
   const [analysis, setAnalysis] = useState<ProductAnalysisResult | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [deepExploring, setDeepExploring] = useState(false);
+  const [deepResult, setDeepResult] = useState<DeepKeywordResponse | null>(null);
+  const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(new Set());
+  const [loadingAnalysis, setLoadingAnalysis] = useState(true);
+  const [showDeepResults, setShowDeepResults] = useState(true);
+
+  // Load existing analysis on mount
+  useEffect(() => {
+    const loadExistingAnalysis = async () => {
+      try {
+        const existing = await getProductAnalysis(product.id);
+        if (existing) {
+          setAnalysis(existing);
+        }
+      } catch (err) {
+        console.error("Failed to load existing analysis:", err);
+      } finally {
+        setLoadingAnalysis(false);
+      }
+    };
+    loadExistingAnalysis();
+  }, [product.id]);
 
   const profit = product.selling_price - product.cogs;
   const adCostPerSale = product.estimated_cpc / 0.01; // Assuming 1% CVR
@@ -534,6 +559,38 @@ function ProductDetailModal({
     } finally {
       setAnalyzing(false);
     }
+  };
+
+  const handleDeepExplore = async () => {
+    if (selectedKeywords.size === 0) return;
+    setDeepExploring(true);
+    setAnalysisError(null);
+    try {
+      const focusKeywords = Array.from(selectedKeywords);
+      const result = await deepKeywordExploration(product.id, 2, focusKeywords);
+      setDeepResult(result);
+      // Refresh the analysis to get updated stored data (don't re-analyze)
+      const updated = await getProductAnalysis(product.id);
+      if (updated) setAnalysis(updated);
+      // Clear selection after successful exploration
+      setSelectedKeywords(new Set());
+    } catch (err) {
+      setAnalysisError(err instanceof Error ? err.message : "Deep exploration failed");
+    } finally {
+      setDeepExploring(false);
+    }
+  };
+
+  const toggleKeywordSelection = (keyword: string) => {
+    setSelectedKeywords(prev => {
+      const next = new Set(prev);
+      if (next.has(keyword)) {
+        next.delete(keyword);
+      } else {
+        next.add(keyword);
+      }
+      return next;
+    });
   };
 
   return (
@@ -632,7 +689,7 @@ function ProductDetailModal({
             <h4 className="font-semibold text-purple-800 flex items-center gap-2">
               <span className="text-lg">🤖</span> AI Product Analysis
             </h4>
-            {!analysis && (
+            {!loadingAnalysis && !analysis && (
               <button
                 onClick={handleAnalyze}
                 disabled={analyzing}
@@ -651,11 +708,28 @@ function ProductDetailModal({
                 )}
               </button>
             )}
+            {analysis && (
+              <button
+                onClick={handleAnalyze}
+                disabled={analyzing}
+                className="rounded-md bg-purple-100 px-3 py-1.5 text-xs font-medium text-purple-700 hover:bg-purple-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+              >
+                {analyzing ? "Re-analyzing..." : "Re-analyze"}
+              </button>
+            )}
           </div>
 
           {analysisError && (
             <div className="rounded-md bg-red-100 border border-red-200 p-3 text-sm text-red-700">
               <strong>Error:</strong> {analysisError}
+            </div>
+          )}
+
+          {loadingAnalysis && (
+            <div className="text-center py-4">
+              <div className="inline-block animate-pulse">
+                <p className="text-purple-600 text-sm">Loading existing analysis...</p>
+              </div>
             </div>
           )}
 
@@ -759,12 +833,32 @@ function ProductDetailModal({
               {/* Top Keywords */}
               {analysis.keyword_analysis.exploration?.top_opportunities?.length > 0 && (
                 <div className="rounded-lg bg-white border p-4">
-                  <h5 className="font-medium text-gray-800 mb-3">
-                    Top Keyword Opportunities
-                    <span className="ml-2 text-sm text-gray-500 font-normal">
-                      ({analysis.keyword_analysis.exploration.total_keywords} found)
-                    </span>
-                  </h5>
+                  <div className="flex items-center justify-between mb-3">
+                    <h5 className="font-medium text-gray-800">
+                      Top Keyword Opportunities
+                      <span className="ml-2 text-sm text-gray-500 font-normal">
+                        ({analysis.keyword_analysis.exploration.total_keywords} found)
+                      </span>
+                    </h5>
+                    {selectedKeywords.size > 0 && (
+                      <button
+                        onClick={handleDeepExplore}
+                        disabled={deepExploring}
+                        className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        {deepExploring ? (
+                          <>
+                            <span className="animate-spin">⟳</span>
+                            Exploring...
+                          </>
+                        ) : (
+                          <>
+                            🔍 Deep Dive ({selectedKeywords.size})
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
                   {analysis.keyword_analysis.best_keyword && (
                     <div className="mb-3 p-2 bg-purple-50 rounded border border-purple-200">
                       <span className="text-sm text-purple-700">
@@ -775,10 +869,54 @@ function ProductDetailModal({
                       </span>
                     </div>
                   )}
+                  {/* Show deep dive results - either from fresh deepResult or persisted in analysis */}
+                  {(() => {
+                    const deepKeywords = deepResult?.top_new_keywords || analysis.keyword_analysis.deep_dive_results || [];
+                    if (deepKeywords.length === 0) return null;
+                    return (
+                      <div className="mb-3 rounded border border-green-200 overflow-hidden">
+                        <button
+                          onClick={() => setShowDeepResults(!showDeepResults)}
+                          className="w-full p-2 bg-green-50 flex items-center justify-between hover:bg-green-100 transition-colors"
+                        >
+                          <span className="text-sm text-green-700">
+                            <strong>Deep Dive Keywords:</strong> {deepKeywords.length} discovered
+                            {deepResult && ` (depth ${deepResult.depth_reached})`}
+                          </span>
+                          <span className="text-green-600">{showDeepResults ? "▼" : "▶"}</span>
+                        </button>
+                        {showDeepResults && (
+                          <div className="p-2 bg-green-50/50 max-h-48 overflow-y-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="border-b text-left text-gray-600">
+                                  <th className="pb-1 pr-2">Keyword</th>
+                                  <th className="pb-1 pr-2 text-right">Volume</th>
+                                  <th className="pb-1 pr-2 text-right">CPC</th>
+                                  <th className="pb-1 text-right">Score</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {deepKeywords.slice(0, 20).map((kw, idx) => (
+                                  <tr key={idx} className="border-b border-green-100">
+                                    <td className="py-1 pr-2 font-medium text-green-800">{kw.keyword}</td>
+                                    <td className="py-1 pr-2 text-right font-mono">{kw.volume.toLocaleString()}</td>
+                                    <td className="py-1 pr-2 text-right font-mono">${kw.cpc.toFixed(2)}</td>
+                                    <td className="py-1 text-right font-mono font-bold text-green-600">{kw.opportunity_score.toFixed(1)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b text-left text-gray-600">
+                          <th className="pb-2 pr-2 w-8"></th>
                           <th className="pb-2 pr-4">Keyword</th>
                           <th className="pb-2 pr-4 text-right">Volume</th>
                           <th className="pb-2 pr-4 text-right">CPC</th>
@@ -788,7 +926,22 @@ function ProductDetailModal({
                       </thead>
                       <tbody>
                         {analysis.keyword_analysis.exploration.top_opportunities.slice(0, 10).map((kw, idx) => (
-                          <tr key={idx} className="border-b border-gray-100">
+                          <tr
+                            key={idx}
+                            className={`border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
+                              selectedKeywords.has(kw.keyword) ? "bg-purple-50" : ""
+                            }`}
+                            onClick={() => toggleKeywordSelection(kw.keyword)}
+                          >
+                            <td className="py-1.5 pr-2">
+                              <input
+                                type="checkbox"
+                                checked={selectedKeywords.has(kw.keyword)}
+                                onChange={() => toggleKeywordSelection(kw.keyword)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                              />
+                            </td>
                             <td className="py-1.5 pr-4 font-medium">{kw.keyword}</td>
                             <td className="py-1.5 pr-4 text-right font-mono">
                               {kw.volume.toLocaleString()}
@@ -813,6 +966,9 @@ function ProductDetailModal({
                       </tbody>
                     </table>
                   </div>
+                  <p className="mt-2 text-xs text-gray-500">
+                    Select keywords to explore deeper with Google Ads Keyword Planner
+                  </p>
                 </div>
               )}
 
@@ -862,7 +1018,7 @@ function ProductDetailModal({
             </div>
           )}
 
-          {!analysis && !analyzing && (
+          {!analysis && !analyzing && !loadingAnalysis && (
             <p className="text-sm text-purple-600">
               Click "Analyze with AI" to get LLM-powered insights including product understanding,
               keyword opportunities from Google Ads, Amazon competitor analysis, and viability scoring.

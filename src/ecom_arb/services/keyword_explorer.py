@@ -255,11 +255,19 @@ class KeywordExplorer:
                                 depth=0,
                             )
 
-                # Skip recursive expansion for quick analysis
-                # Deep analysis endpoint can enable this later
-                # if self.max_depth > 1:
-                #     expansion_keywords = await self._expand_keywords(...)
-                max_depth_reached = 1
+                # Recursive expansion for deep analysis (max_depth > 1)
+                if self.max_depth > 1:
+                    deeper = await self._expand_keywords(
+                        estimates,
+                        product_understanding,
+                        tier,
+                        1,  # current_depth
+                        all_keywords,
+                    )
+                    explored_count += deeper
+                    max_depth_reached = max(max_depth_reached, self.max_depth)
+                else:
+                    max_depth_reached = 1
 
             except GoogleAdsError as e:
                 error_msg = f"Google Ads error for {tier} tier: {str(e)}"

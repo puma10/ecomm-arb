@@ -1316,6 +1316,57 @@ class AnalyzeProductsResponse(BaseModel):
     results: list[ProductAnalysisResult]
 
 
+@router.get("/product-analysis/{product_id}", response_model=ProductAnalysisResult | None)
+async def get_product_analysis(
+    product_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> ProductAnalysisResult | None:
+    """Get existing analysis for a product without re-running.
+
+    Returns null if the product hasn't been analyzed yet.
+    """
+    from uuid import UUID
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(ScoredProduct).where(ScoredProduct.id == UUID(product_id))
+    )
+    product = result.scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # Check if product has been analyzed
+    if not product.product_understanding:
+        return None
+
+    # Reconstruct amazon_analysis from stored fields
+    amazon_analysis = {
+        "sample_size": len(product.amazon_search_results.get("similar_products", [])) if product.amazon_search_results else 0,
+        "market_price": {
+            "weighted_median": float(product.amazon_median_price) if product.amazon_median_price else None,
+            "min": float(product.amazon_min_price) if product.amazon_min_price else None,
+        },
+        "similar_products": product.amazon_search_results.get("similar_products", []) if product.amazon_search_results else [],
+    }
+
+    # Reconstruct viability from stored fields
+    viability = product.viability_reasons or {}
+    if product.viability_score is not None:
+        viability["score"] = product.viability_score
+
+    # Return stored analysis
+    return ProductAnalysisResult(
+        product_id=str(product.id),
+        name=product.name,
+        cost=float(product.product_cost),
+        product_understanding=product.product_understanding,
+        keyword_analysis=product.keyword_analysis or {},
+        amazon_analysis=amazon_analysis,
+        viability=viability,
+    )
+
+
 @router.post("/analyze-product/{product_id}", response_model=ProductAnalysisResult)
 async def analyze_single_product(
     product_id: str,
@@ -1482,6 +1533,196 @@ async def analyze_single_product(
         keyword_analysis=product.keyword_analysis,
         amazon_analysis=product.amazon_search_results,
         viability=viability,
+    )
+
+
+class DeepKeywordRequest(BaseModel):
+    """Request for deep keyword exploration."""
+    max_depth: int = Field(default=2, ge=2, le=3, description="Exploration depth (2-3)")
+    min_relevance: int = Field(default=50, ge=0, le=100, description="Min relevance score")
+    focus_keywords: list[str] | None = Field(default=None, description="Specific keywords to explore deeper")
+
+
+class DeepKeywordResponse(BaseModel):
+    """Response from deep keyword exploration."""
+    product_id: str
+    keywords_before: int
+    keywords_after: int
+    new_keywords: int
+    depth_reached: int
+    top_new_keywords: list[dict]
+
+
+@router.post("/analyze-product-deep/{product_id}", response_model=DeepKeywordResponse)
+async def deep_keyword_exploration(
+    product_id: str,
+    request: DeepKeywordRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> DeepKeywordResponse:
+    """Deep keyword exploration for a product.
+
+    Recursively explores related keywords from Google Ads Keyword Planner.
+    Requires the product to have been analyzed first (needs product_understanding).
+
+    This can take 2-5 minutes depending on depth.
+    """
+    from uuid import UUID
+    from sqlalchemy import select
+    from ecom_arb.services.llm_analyzer import ProductUnderstanding
+    from ecom_arb.services.keyword_explorer import KeywordExplorer
+
+    max_depth = request.max_depth if request else 2
+    min_relevance = request.min_relevance if request else 50
+
+    # Get the product
+    result = await db.execute(
+        select(ScoredProduct).where(ScoredProduct.id == UUID(product_id))
+    )
+    product = result.scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    if not product.product_understanding:
+        raise HTTPException(
+            status_code=400,
+            detail="Product must be analyzed first (run /analyze-product first)"
+        )
+
+    # Get existing keyword count
+    existing_keywords = set()
+    if product.keyword_analysis and product.keyword_analysis.get("exploration"):
+        for tier_keywords in product.keyword_analysis["exploration"].get("by_tier", {}).values():
+            for kw in tier_keywords:
+                existing_keywords.add(kw.get("keyword", "").lower())
+
+    keywords_before = len(existing_keywords)
+    logger.info(f"Deep exploration for {product.name}: {keywords_before} existing keywords, depth={max_depth}")
+
+    # Reconstruct ProductUnderstanding from stored data
+    pu = product.product_understanding
+
+    # If focus_keywords provided, use them as seed keywords for targeted exploration
+    focus_keywords = request.focus_keywords if request and request.focus_keywords else None
+    if focus_keywords:
+        # Put all focus keywords in 'specific' tier for targeted exploration
+        seed_keywords = {"exact": [], "specific": focus_keywords, "broad": []}
+        logger.info(f"Deep exploration with focus keywords: {focus_keywords}")
+    else:
+        seed_keywords = product.keyword_analysis.get("seed_keywords", {"exact": [], "specific": [], "broad": []})
+
+    understanding = ProductUnderstanding(
+        product_type=pu.get("product_type", ""),
+        style=pu.get("style", []),
+        materials=pu.get("materials", []),
+        use_cases=pu.get("use_cases", []),
+        buyer_persona=pu.get("buyer_persona", ""),
+        quality_tier=pu.get("quality_tier", "mid-range"),
+        price_expectation=pu.get("price_expectation", ""),
+        seed_keywords=seed_keywords,
+    )
+
+    # Run deep exploration
+    explorer = KeywordExplorer(
+        max_depth=max_depth,
+        min_relevance=min_relevance,
+        max_keywords_per_tier=50,  # Allow more keywords in deep mode
+    )
+    exploration = await explorer.explore(understanding)
+
+    # Find new keywords
+    new_keywords = []
+    for kw in exploration.keywords:
+        if kw.keyword.lower() not in existing_keywords:
+            new_keywords.append({
+                "keyword": kw.keyword,
+                "volume": kw.monthly_volume,
+                "cpc": kw.avg_cpc,
+                "relevance": kw.relevance_score,
+                "opportunity_score": round(kw.opportunity_score, 1),
+                "tier": kw.tier,
+                "depth": kw.depth,
+            })
+
+    # Sort new keywords by opportunity score
+    new_keywords.sort(key=lambda x: x["opportunity_score"], reverse=True)
+
+    # MERGE new keywords with existing ones (don't replace!)
+    existing_exploration = product.keyword_analysis.get("exploration", {})
+    existing_by_tier = existing_exploration.get("by_tier", {})
+    new_by_tier = exploration.to_dict().get("by_tier", {})
+
+    # Merge keywords by tier, avoiding duplicates
+    merged_by_tier = {}
+    all_keywords_seen = set()
+    for tier in ["exact", "specific", "broad"]:
+        merged_by_tier[tier] = []
+        # Add existing keywords first
+        for kw in existing_by_tier.get(tier, []):
+            kw_lower = kw.get("keyword", "").lower()
+            if kw_lower not in all_keywords_seen:
+                all_keywords_seen.add(kw_lower)
+                merged_by_tier[tier].append(kw)
+        # Add new keywords
+        for kw in new_by_tier.get(tier, []):
+            kw_lower = kw.get("keyword", "").lower()
+            if kw_lower not in all_keywords_seen:
+                all_keywords_seen.add(kw_lower)
+                merged_by_tier[tier].append(kw)
+
+    # Merge top_opportunities
+    existing_top = existing_exploration.get("top_opportunities", [])
+    new_top = exploration.to_dict().get("top_opportunities", [])
+    merged_top = []
+    top_seen = set()
+    for kw in existing_top + new_top:
+        kw_lower = kw.get("keyword", "").lower()
+        if kw_lower not in top_seen:
+            top_seen.add(kw_lower)
+            merged_top.append(kw)
+    # Sort by opportunity_score and keep top 20
+    merged_top.sort(key=lambda x: x.get("opportunity_score", 0), reverse=True)
+    merged_top = merged_top[:20]
+
+    # Update database with merged results
+    product.keyword_analysis = {
+        "seed_keywords": product.keyword_analysis.get("seed_keywords", understanding.seed_keywords),
+        "best_keyword": product.keyword_analysis.get("best_keyword"),
+        "exploration": {
+            "total_keywords": len(all_keywords_seen),
+            "total_explored": existing_exploration.get("total_explored", 0) + exploration.total_explored,
+            "depth_reached": max(existing_exploration.get("depth_reached", 1), exploration.depth_reached),
+            "errors": existing_exploration.get("errors", []) + exploration.errors,
+            "top_opportunities": merged_top,
+            "by_tier": merged_by_tier,
+        },
+        # Store deep dive results for UI persistence
+        "deep_dive_results": new_keywords[:20],
+    }
+
+    # Update best keyword if we found a better one
+    if exploration.top_opportunities:
+        top = exploration.top_opportunities[0]
+        current_best = product.keyword_analysis.get("best_keyword", {})
+        current_score = current_best.get("relevance", 0) * (current_best.get("volume", 0) or 1)
+        new_score = top.relevance_score * top.monthly_volume
+        if new_score > current_score:
+            product.keyword_analysis["best_keyword"] = {
+                "keyword": top.keyword,
+                "volume": top.monthly_volume,
+                "cpc": top.avg_cpc,
+                "relevance": top.relevance_score,
+            }
+
+    await db.commit()
+
+    return DeepKeywordResponse(
+        product_id=product_id,
+        keywords_before=keywords_before,
+        keywords_after=len(exploration.keywords),
+        new_keywords=len(new_keywords),
+        depth_reached=exploration.depth_reached,
+        top_new_keywords=new_keywords[:10],
     )
 
 

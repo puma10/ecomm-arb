@@ -687,6 +687,7 @@ export interface KeywordAnalysisResult {
     relevance: number;
   } | null;
   exploration: KeywordExplorationDetails;
+  deep_dive_results?: KeywordOpportunity[];
 }
 
 export interface AmazonMatch {
@@ -727,6 +728,18 @@ export interface ProductAnalysisResult {
   viability: ViabilityAssessment;
 }
 
+export async function getProductAnalysis(productId: string): Promise<ProductAnalysisResult | null> {
+  const res = await fetch(`${API_URL}/admin/product-analysis/${productId}`);
+
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to get product analysis");
+  }
+
+  return res.json();
+}
+
 export async function analyzeProduct(productId: string): Promise<ProductAnalysisResult> {
   const res = await fetch(`${API_URL}/admin/analyze-product/${productId}`, {
     method: "POST",
@@ -736,6 +749,38 @@ export async function analyzeProduct(productId: string): Promise<ProductAnalysis
   if (!res.ok) {
     const error = await res.json();
     throw new Error(error.detail || "Failed to analyze product");
+  }
+
+  return res.json();
+}
+
+export interface DeepKeywordResponse {
+  product_id: string;
+  keywords_before: number;
+  keywords_after: number;
+  new_keywords: number;
+  depth_reached: number;
+  top_new_keywords: KeywordOpportunity[];
+}
+
+export async function deepKeywordExploration(
+  productId: string,
+  maxDepth: number = 2,
+  focusKeywords?: string[]
+): Promise<DeepKeywordResponse> {
+  const body: { max_depth: number; focus_keywords?: string[] } = { max_depth: maxDepth };
+  if (focusKeywords && focusKeywords.length > 0) {
+    body.focus_keywords = focusKeywords;
+  }
+  const res = await fetch(`${API_URL}/admin/analyze-product-deep/${productId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to run deep keyword exploration");
   }
 
   return res.json();
