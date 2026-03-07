@@ -1,0 +1,460 @@
+{
+  "assignments": {
+    "ecom-arb-178": {
+      "build-efficiency": {
+        "alignment": 0.7,
+        "assigned": "sandi",
+        "reason": "Implementing reliable UPC/EAN matching requires solid engineering depth and directly improves internal automation quality."
+      },
+      "grow-marketing": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "This backend feature is only tangential to marketing outputs, though better product data can modestly aid future campaigns."
+      },
+      "maintain-salary": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Technical work only indirectly supports salary/content goals, yet still benefits baseline product stability."
+      },
+      "replace-income": {
+        "alignment": 0.95,
+        "assigned": "sandi",
+        "reason": "Accurate product matching is core to monetizing arbitrage deals, so the senior engineer should lead this revenue-critical feature."
+      }
+    },
+    "ecom-arb-18d": {
+      "build-efficiency": {
+        "alignment": 0.55,
+        "assigned": "sandi",
+        "reason": "Developing the first REST API demands cohesive backend architecture that Sandi can own end-to-end while enabling future automation hooks."
+      },
+      "grow-marketing": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "While not a marketing asset itself, the feed supports future promotional content, and keeping Sandi on ecom-arb backend avoids context thrash."
+      },
+      "maintain-salary": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "Building the API is foundational work but only tangential to salary/content continuity, yet Sandi remains the right engineer for consistency."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "sandi",
+        "reason": "This API underpins the opportunity feed that powers monetizable arbitrage alerts, so Sandi should implement it reliably for revenue readiness."
+      }
+    },
+    "ecom-arb-18n": {
+      "build-efficiency": {
+        "alignment": 0.5,
+        "assigned": "sandi",
+        "reason": "Estimator improves internal tooling for evaluating arbitrage deals, needing senior engineering judgment."
+      },
+      "grow-marketing": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Better shipping estimates marginally help marketing insights but are not primarily marketing work."
+      },
+      "maintain-salary": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "Task only indirectly contributes to content or salary stability, so relevance is low."
+      },
+      "replace-income": {
+        "alignment": 0.85,
+        "assigned": "sandi",
+        "reason": "Accurate shipping costs directly impact pricing accuracy and revenue projections for the arbitrage model."
+      }
+    },
+    "ecom-arb-19t": {
+      "build-efficiency": {
+        "alignment": 0.8,
+        "assigned": "sandi",
+        "reason": "Engineering-heavy fee engine that automates per-platform margin math needs a senior implementer to boost internal efficiency."
+      },
+      "grow-marketing": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "Feature is infrastructure-focused and offers minimal direct marketing leverage, so we keep it with the existing engineer but note low goal relevance."
+      },
+      "maintain-salary": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Task only tangentially supports salary stability via better deal sourcing, so alignment is limited despite same engineering owner."
+      },
+      "replace-income": {
+        "alignment": 0.7,
+        "assigned": "sandi",
+        "reason": "Accurate fee modeling directly impacts profitable arbitrage decisions, so a senior dev ensures revenue-critical logic is correct."
+      }
+    },
+    "ecom-arb-1b1": {
+      "build-efficiency": {
+        "alignment": 0.8,
+        "assigned": "ai",
+        "reason": "Automating profit checks boosts tooling efficiency and AI can implement the calculator without tying up senior time."
+      },
+      "grow-marketing": {
+        "alignment": 0.2,
+        "assigned": "ai",
+        "reason": "Calculator doesn\u2019t impact marketing outputs, so minimal alignment yet still cheap to implement via AI."
+      },
+      "maintain-salary": {
+        "alignment": 0.3,
+        "assigned": "ai",
+        "reason": "Helps backend business health indirectly but has little to do with producing salary-sustaining content."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "ai",
+        "reason": "Accurate margin tracking directly supports revenue decisions and AI delivers the feature cheaply."
+      }
+    },
+    "ecom-arb-1jz": {
+      "build-efficiency": {
+        "alignment": 0.8,
+        "assigned": "sandi",
+        "reason": "Engineering a live opportunities dashboard streamlines monitoring workflows and reduces manual checks, directly boosting devex for this project."
+      },
+      "grow-marketing": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Dashboard work is mostly internal tooling with minimal direct marketing impact, though clearer data can later inform outreach narratives."
+      },
+      "maintain-salary": {
+        "alignment": 0.4,
+        "assigned": "sandi",
+        "reason": "While indirectly helpful by tracking income opportunities, it is less tied to content or salary maintenance but still supports stable deal flow."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "sandi",
+        "reason": "A dashboard that surfaces profitable arbitrage deals accelerates revenue capture, so dedicating the senior engineer keeps the path to monetization tight."
+      }
+    },
+    "ecom-arb-1ko": {
+      "build-efficiency": {
+        "alignment": 0.7,
+        "assigned": "sandi",
+        "reason": "Engineering-heavy pipeline setup that improves internal automation fits sandi\u2019s devex focus."
+      },
+      "grow-marketing": {
+        "alignment": 0.4,
+        "assigned": "sandi",
+        "reason": "Pipeline data can eventually fuel marketing narratives but work is primarily technical, so relevance is limited."
+      },
+      "maintain-salary": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Only tangential impact on personal income streams, so alignment is modest despite same engineering owner."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "sandi",
+        "reason": "Price monitoring pipeline directly supports revenue-generating arbitrage, requiring sandi\u2019s implementation strength."
+      }
+    },
+    "ecom-arb-1pk": {
+      "build-efficiency": {
+        "alignment": 0.4,
+        "assigned": "ai",
+        "reason": "Automating tax tracking streamlines ops and frees builders\u2019 time, so AI can prototype the tooling cheaply."
+      },
+      "grow-marketing": {
+        "alignment": 0.15,
+        "assigned": "ai",
+        "reason": "Marketing impact is small, but AI can still handle the back-office tooling while pricier resources stay focused on promotion."
+      },
+      "maintain-salary": {
+        "alignment": 0.7,
+        "assigned": "ai",
+        "reason": "Salary stability depends on after-tax cash flow, and AI can draft the required calculator or workbook efficiently."
+      },
+      "replace-income": {
+        "alignment": 0.6,
+        "assigned": "ai",
+        "reason": "Revenue-focused goal needs clear net profit visibility, and AI can assemble the core tracker without expensive engineering time."
+      }
+    },
+    "ecom-arb-1yp": {
+      "build-efficiency": {
+        "alignment": 0.82,
+        "assigned": "sandi",
+        "reason": "Engineering integration work improves automation tooling for arbitrage system and benefits from consistent senior ownership."
+      },
+      "grow-marketing": {
+        "alignment": 0.36,
+        "assigned": "sandi",
+        "reason": "Better inventory signals can support future marketing but impact is indirect, so alignment is modest."
+      },
+      "maintain-salary": {
+        "alignment": 0.28,
+        "assigned": "sandi",
+        "reason": "Task is only tangential to salary/content retention but still contributes to overall platform stability."
+      },
+      "replace-income": {
+        "alignment": 0.91,
+        "assigned": "sandi",
+        "reason": "Reliable Walmart feed unlocks new product data that directly drives arbitrage revenue, best handled by senior engineer for speed."
+      }
+    },
+    "ecom-arb-2h1": {
+      "build-efficiency": {
+        "alignment": 0.8,
+        "assigned": "sandi",
+        "reason": "Building a resilient Amazon scraper is complex engineering work that improves internal automation; Sandi can handle anti-bot controls and data quality while keeping ecom-arb engineering on one owner."
+      },
+      "grow-marketing": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "Marketing impact is minimal; assigning Sandi ensures the technical groundwork exists before any marketing use cases can arise."
+      },
+      "maintain-salary": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Scraper progress only indirectly supports salary via future content insights, so alignment is low even though Sandi remains best suited for the engineering lift."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "sandi",
+        "reason": "Reliable Amazon data is foundational for monetizing arbitrage deals, so Sandi should implement the scraper to ensure it directly supports revenue generation."
+      }
+    },
+    "ecom-arb-2o9": {
+      "build-efficiency": {
+        "alignment": 0.9,
+        "assigned": "sandi",
+        "reason": "High-priority scraper improves automation tooling for arbitrage workflows, needs senior engineering quality."
+      },
+      "grow-marketing": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Scraper only indirectly helps marketing via better deal insights, not a primary lever."
+      },
+      "maintain-salary": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "Task is engineering-heavy with minimal impact on salary/content goals."
+      },
+      "replace-income": {
+        "alignment": 0.7,
+        "assigned": "sandi",
+        "reason": "Better listing data unlocks arbitrage revenue opportunities, so strong revenue tie-in."
+      }
+    },
+    "ecom-arb-2ol": {
+      "build-efficiency": {
+        "alignment": 0.5,
+        "assigned": "sandi",
+        "reason": "Building the competitor tracking module strengthens the automation/tooling core of ecom-arb."
+      },
+      "grow-marketing": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Improved product intelligence offers limited marketing leverage compared to direct marketing work."
+      },
+      "maintain-salary": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "This module only indirectly supports salary maintenance through better deal flow."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "sandi",
+        "reason": "Competitor tracking is central to finding profitable arbitrage deals that drive revenue."
+      }
+    },
+    "ecom-arb-2qp": {
+      "build-efficiency": {
+        "alignment": 0.5,
+        "assigned": "ai",
+        "reason": "Implementing automated historical charts streamlines internal deal analysis despite being a product feature, so AI can handle the coding efficiently."
+      },
+      "grow-marketing": {
+        "alignment": 0.3,
+        "assigned": "ai",
+        "reason": "Product insights could yield marketing assets later, but the current scope is mostly internal tooling, keeping alignment modest while AI builds it."
+      },
+      "maintain-salary": {
+        "alignment": 0.2,
+        "assigned": "ai",
+        "reason": "The chart feature doesn\u2019t materially impact content output or personal salary stability, so alignment is low though AI can still execute it."
+      },
+      "replace-income": {
+        "alignment": 0.7,
+        "assigned": "ai",
+        "reason": "Better price history visibility directly supports revenue-producing arbitrage decisions, making this a solid fit for AI-led implementation."
+      }
+    },
+    "ecom-arb-3ar": {
+      "build-efficiency": {
+        "alignment": 0.78,
+        "assigned": "ai",
+        "reason": "Implementing a robust rate limiter directly improves the automation reliability and developer workflow for ecom-arb APIs."
+      },
+      "grow-marketing": {
+        "alignment": 0.22,
+        "assigned": "ai",
+        "reason": "Rate limiting is only tangential to marketing; it helps uptime but doesn\u2019t drive campaigns or SEO directly."
+      },
+      "maintain-salary": {
+        "alignment": 0.18,
+        "assigned": "ai",
+        "reason": "Task has minimal impact on salary/content goals beyond general platform stability."
+      },
+      "replace-income": {
+        "alignment": 0.62,
+        "assigned": "ai",
+        "reason": "Preventing API bans keeps the arbitrage product running, protecting revenue streams tied to timely deal detection."
+      }
+    },
+    "ecom-arb-3gj": {
+      "build-efficiency": {
+        "alignment": 0.8,
+        "assigned": "sandi",
+        "reason": "Robust schema enables automation and reliable tooling for price tracking workflows."
+      },
+      "grow-marketing": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Better deal data slightly strengthens marketing stories but remains primarily backend engineering."
+      },
+      "maintain-salary": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "Indirect impact on personal income; mainly foundational engineering work."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "sandi",
+        "reason": "Accurate price snapshots are core infrastructure for launching revenue-generating arbitrage features."
+      }
+    },
+    "ecom-arb-3ix": {
+      "build-efficiency": {
+        "alignment": 0.8,
+        "assigned": "sandi",
+        "reason": "Critical engineering feature that automates deal detection, improving future workflow efficiency."
+      },
+      "grow-marketing": {
+        "alignment": 0.5,
+        "assigned": "sandi",
+        "reason": "Stronger product alerts aid marketing narratives yet primary impact remains product-side, so partial alignment."
+      },
+      "maintain-salary": {
+        "alignment": 0.4,
+        "assigned": "sandi",
+        "reason": "Feature is not content-focused but still indirectly protects earnings by unlocking profitable work."
+      },
+      "replace-income": {
+        "alignment": 1.0,
+        "assigned": "sandi",
+        "reason": "Directly enables revenue by surfacing high-margin arbitrage opportunities, so senior implementation is warranted."
+      }
+    },
+    "ecom-arb-3vy": {
+      "build-efficiency": {
+        "alignment": 0.8,
+        "assigned": "sandi",
+        "reason": "Core automation feature that improves internal tooling and requires senior engineering judgment."
+      },
+      "grow-marketing": {
+        "alignment": 0.4,
+        "assigned": "sandi",
+        "reason": "Improves product capabilities that can later be marketed, yet limited direct marketing impact now."
+      },
+      "maintain-salary": {
+        "alignment": 0.3,
+        "assigned": "sandi",
+        "reason": "Only indirectly protects salary via future income, but still best handled by the ongoing project engineer."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "sandi",
+        "reason": "Arbitrage detection drives monetizable deal flow, so senior engineer ownership keeps revenue timeline on track."
+      }
+    },
+    "ecom-arb-613": {
+      "build-efficiency": {
+        "alignment": 0.8,
+        "assigned": "ai",
+        "reason": "Automating ROI and holding periods directly sharpens internal efficiency, and ai can implement the calculator cheaply without human context switching."
+      },
+      "grow-marketing": {
+        "alignment": 0.2,
+        "assigned": "ai",
+        "reason": "Feature has minimal marketing impact, but using ai keeps the engineering cost low for this low-alignment goal."
+      },
+      "maintain-salary": {
+        "alignment": 0.4,
+        "assigned": "ai",
+        "reason": "More accurate ROI estimates only indirectly support personal salary stability, so alignment is moderate while ai remains the most efficient implementer."
+      },
+      "replace-income": {
+        "alignment": 0.9,
+        "assigned": "ai",
+        "reason": "Better ROI modeling underpins revenue-focused arbitrage decisions, and ai can deliver the feature quickly to accelerate monetization."
+      }
+    },
+    "ecom-arb-b1t": {
+      "build-efficiency": {
+        "alignment": 0.85,
+        "assigned": "sandi",
+        "reason": "Sandi can resolve the core matching bug quickly, removing duplicate noise from the automation pipeline and directly improving internal efficiency."
+      },
+      "grow-marketing": {
+        "alignment": 0.2,
+        "assigned": "sandi",
+        "reason": "Accurate matching provides cleaner data for future marketing insights, but the immediate impact on marketing initiatives is minor."
+      },
+      "maintain-salary": {
+        "alignment": 0.25,
+        "assigned": "sandi",
+        "reason": "This backend fix only tangentially supports salary stability since it does not create new content or monetization streams."
+      },
+      "replace-income": {
+        "alignment": 0.55,
+        "assigned": "sandi",
+        "reason": "Reliable product matching preserves arbitrage opportunities, so having Sandi fix it safeguards revenue flows even if it is not a direct sales push."
+      }
+    },
+    "ecom-arb-y1g": {
+      "build-efficiency": {
+        "alignment": 0.78,
+        "assigned": "sandi",
+        "reason": "Implementing fuzzy fallback improves automation accuracy for price monitoring, demanding senior engineering quality to avoid regressions."
+      },
+      "grow-marketing": {
+        "alignment": 0.31,
+        "assigned": "sandi",
+        "reason": "Improved detection can feed more compelling content about deals, yet marketing impact is secondary to core functionality, warranting lower alignment."
+      },
+      "maintain-salary": {
+        "alignment": 0.22,
+        "assigned": "sandi",
+        "reason": "Only indirectly supports income stability through backend reliability, so low but nonzero alignment; still needs same engineer for coherence."
+      },
+      "replace-income": {
+        "alignment": 0.86,
+        "assigned": "sandi",
+        "reason": "Better match coverage increases high-margin arbitrage hits, directly impacting revenue, so senior engineer keeps consistency for all ecom-arb build work."
+      }
+    }
+  },
+  "meta": {
+    "classified_at": "2026-03-05T02:28:42Z",
+    "goals": [
+      "build-efficiency",
+      "replace-income",
+      "maintain-salary",
+      "grow-marketing"
+    ],
+    "model": "gpt-5-codex",
+    "resources": [
+      "ai",
+      "admin",
+      "sandi",
+      "josh"
+    ]
+  }
+}
