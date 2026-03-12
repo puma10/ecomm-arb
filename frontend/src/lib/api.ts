@@ -785,3 +785,69 @@ export async function deepKeywordExploration(
 
   return res.json();
 }
+
+// ── Profit Calculator ──────────────────────────────────────────────
+
+export interface ProfitCalculatorInput {
+  product_cost: number;
+  selling_price: number;
+  shipping_cost: number;
+  ad_spend_monthly: number;
+  cpc: number;
+  cvr: number;
+  payment_fee_rate: number;
+  refund_rate: number;
+  fixed_costs_monthly: number;
+}
+
+export interface ProfitBreakdown {
+  revenue: number;
+  cogs: number;
+  gross_profit: number;
+  gross_margin_pct: number;
+  payment_fees: number;
+  refund_cost: number;
+  net_profit_per_unit: number;
+  net_margin_pct: number;
+}
+
+export interface AdMetrics {
+  cost_per_acquisition: number;
+  clicks_per_sale: number;
+  monthly_clicks: number;
+  monthly_sales_from_ads: number;
+  roas: number | null;
+  profit_after_ads_per_unit: number;
+  ad_profitable: boolean;
+}
+
+export interface BreakEvenAnalysis {
+  break_even_units: number;
+  break_even_revenue: number;
+  monthly_fixed_costs: number;
+}
+
+export interface ProfitCalculatorResult {
+  profit: ProfitBreakdown;
+  ads: AdMetrics | null;
+  break_even: BreakEvenAnalysis;
+  roi_pct: number;
+  max_cpc: number;
+}
+
+export async function calculateProfit(
+  input: ProfitCalculatorInput
+): Promise<ProfitCalculatorResult> {
+  const res = await fetch(`${API_URL}/calculator/profit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to calculate profit");
+  }
+
+  return res.json();
+}
