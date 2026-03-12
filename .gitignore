@@ -84,3 +84,7 @@ storage.sqlite3*
 # SQLite WAL files
 *.db-shm
 *.db-wal
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
