@@ -785,3 +785,223 @@ export async function deepKeywordExploration(
 
   return res.json();
 }
+
+// ============================================================================
+// Price Monitoring API
+// ============================================================================
+
+export interface PriceHistoryItem {
+  id: string;
+  product_ref: string;
+  product_name: string;
+  price: number;
+  previous_price: number | null;
+  source: string;
+  currency: string;
+  notes: string | null;
+  recorded_at: string;
+}
+
+export interface PriceHistoryResponse {
+  product_ref: string;
+  product_name: string;
+  items: PriceHistoryItem[];
+  total: number;
+  current_price: number | null;
+  price_min: number | null;
+  price_max: number | null;
+  price_avg: number | null;
+  price_change_pct: number | null;
+}
+
+export interface PriceComparisonItem {
+  product_ref: string;
+  product_name: string;
+  current_price: number | null;
+  previous_price: number | null;
+  price_change: number | null;
+  price_change_pct: number | null;
+  price_min_30d: number | null;
+  price_max_30d: number | null;
+  last_updated: string | null;
+  source: string | null;
+}
+
+export interface PriceComparisonResponse {
+  items: PriceComparisonItem[];
+  total: number;
+}
+
+export interface PriceAlertItem {
+  id: string;
+  product_ref: string;
+  product_name: string;
+  condition: string;
+  threshold: number;
+  status: string;
+  triggered_at: string | null;
+  triggered_price: number | null;
+  created_at: string;
+}
+
+export interface PriceAlertListResponse {
+  items: PriceAlertItem[];
+  total: number;
+}
+
+export interface PriceStatsResponse {
+  total_tracked: number;
+  total_observations: number;
+  active_alerts: number;
+  triggered_alerts: number;
+  products_with_price_drops: number;
+  products_with_price_increases: number;
+}
+
+function toNum(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
+
+export async function getPriceStats(): Promise<PriceStatsResponse> {
+  const res = await fetch(`${API_URL}/prices/stats`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to fetch price stats");
+  return res.json();
+}
+
+export async function getPriceHistory(
+  productRef: string,
+  days: number = 30
+): Promise<PriceHistoryResponse> {
+  const res = await fetch(
+    `${API_URL}/prices/history/${encodeURIComponent(productRef)}?days=${days}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error("Failed to fetch price history");
+  const data = await res.json();
+  return {
+    ...data,
+    current_price: toNum(data.current_price),
+    price_min: toNum(data.price_min),
+    price_max: toNum(data.price_max),
+    price_avg: toNum(data.price_avg),
+    price_change_pct: toNum(data.price_change_pct),
+    items: data.items.map((item: Record<string, unknown>) => ({
+      ...item,
+      price: Number(item.price),
+      previous_price: toNum(item.previous_price),
+    })),
+  };
+}
+
+export async function getPriceComparison(params?: {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<PriceComparisonResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.search) searchParams.set("search", params.search);
+  if (params?.limit) searchParams.set("limit", params.limit.toString());
+  if (params?.offset) searchParams.set("offset", params.offset.toString());
+
+  const url = `${API_URL}/prices/comparison${searchParams.toString() ? `?${searchParams}` : ""}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to fetch price comparison");
+  const data = await res.json();
+  return {
+    ...data,
+    items: data.items.map((item: Record<string, unknown>) => ({
+      ...item,
+      current_price: toNum(item.current_price),
+      previous_price: toNum(item.previous_price),
+      price_change: toNum(item.price_change),
+      price_change_pct: toNum(item.price_change_pct),
+      price_min_30d: toNum(item.price_min_30d),
+      price_max_30d: toNum(item.price_max_30d),
+    })),
+  };
+}
+
+export async function getPriceAlerts(params?: {
+  status?: string;
+  product_ref?: string;
+}): Promise<PriceAlertListResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set("status", params.status);
+  if (params?.product_ref) searchParams.set("product_ref", params.product_ref);
+
+  const url = `${API_URL}/prices/alerts${searchParams.toString() ? `?${searchParams}` : ""}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to fetch alerts");
+  const data = await res.json();
+  return {
+    ...data,
+    items: data.items.map((item: Record<string, unknown>) => ({
+      ...item,
+      threshold: Number(item.threshold),
+      triggered_price: toNum(item.triggered_price),
+    })),
+  };
+}
+
+export async function createPriceAlert(req: {
+  product_ref: string;
+  product_name?: string;
+  condition: string;
+  threshold: number;
+}): Promise<PriceAlertItem> {
+  const res = await fetch(`${API_URL}/prices/alerts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to create alert");
+  }
+  const data = await res.json();
+  return { ...data, threshold: Number(data.threshold) };
+}
+
+export async function dismissPriceAlert(alertId: string): Promise<void> {
+  const res = await fetch(`${API_URL}/prices/alerts/${alertId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to dismiss alert");
+  }
+}
+
+export async function recordPrice(req: {
+  product_ref: string;
+  product_name?: string;
+  price: number;
+  source?: string;
+  notes?: string;
+}): Promise<PriceHistoryItem> {
+  const res = await fetch(`${API_URL}/prices/record`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to record price");
+  }
+  const data = await res.json();
+  return { ...data, price: Number(data.price), previous_price: toNum(data.previous_price) };
+}
+
+export async function snapshotPrices(): Promise<{
+  status: string;
+  products_checked: number;
+  prices_recorded: number;
+}> {
+  const res = await fetch(`${API_URL}/prices/snapshot`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to snapshot prices");
+  return res.json();
+}

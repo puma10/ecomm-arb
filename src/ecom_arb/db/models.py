@@ -6,7 +6,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -486,3 +499,99 @@ class Order(Base):
 
     def __repr__(self) -> str:
         return f"<Order {self.order_number}: {self.status.value}>"
+
+
+class PriceSource(str, enum.Enum):
+    """Source of a price observation."""
+
+    SUPPLIER = "supplier"
+    AMAZON = "amazon"
+    MANUAL = "manual"
+    CRAWL = "crawl"
+
+
+class PriceHistory(Base):
+    """Historical price observations for tracked products."""
+
+    __tablename__ = "price_history"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+
+    # Which product this tracks (references scored_products by source_product_id)
+    product_ref: Mapped[str] = mapped_column(String(255), index=True)
+    product_name: Mapped[str] = mapped_column(String(500), default="")
+
+    # Price data
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    previous_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    source: Mapped[PriceSource] = mapped_column(
+        Enum(PriceSource),
+        default=PriceSource.CRAWL,
+    )
+
+    # Optional metadata
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Timestamps
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+    __table_args__ = (
+        Index("ix_price_history_product_recorded", "product_ref", "recorded_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PriceHistory {self.product_ref}: ${self.price} @ {self.recorded_at}>"
+
+
+class AlertStatus(str, enum.Enum):
+    """Status of a price alert."""
+
+    ACTIVE = "active"
+    TRIGGERED = "triggered"
+    DISMISSED = "dismissed"
+
+
+class AlertCondition(str, enum.Enum):
+    """Alert trigger condition."""
+
+    BELOW = "below"
+    ABOVE = "above"
+    CHANGE_PCT = "change_pct"
+
+
+class PriceAlert(Base):
+    """User-defined price alerts."""
+
+    __tablename__ = "price_alerts"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+
+    # Which product to watch
+    product_ref: Mapped[str] = mapped_column(String(255), index=True)
+    product_name: Mapped[str] = mapped_column(String(500), default="")
+
+    # Alert condition
+    condition: Mapped[AlertCondition] = mapped_column(Enum(AlertCondition))
+    threshold: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+
+    # Status
+    status: Mapped[AlertStatus] = mapped_column(
+        Enum(AlertStatus),
+        default=AlertStatus.ACTIVE,
+    )
+    triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    triggered_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PriceAlert {self.product_ref}: {self.condition.value} ${self.threshold}>"
