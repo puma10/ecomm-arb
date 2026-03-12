@@ -160,6 +160,47 @@ export async function lookupOrder(
   return res.json();
 }
 
+// Admin API - Product Scanner
+
+export interface ScannedProduct {
+  supplier_source: string;
+  supplier_url: string;
+  supplier_sku: string;
+  name: string;
+  description: string;
+  images: string[];
+  cost: number;
+  suggested_price: number;
+  shipping_days_min: number;
+  shipping_days_max: number;
+  categories: string[];
+  weight_grams: number | null;
+  warehouse_country: string | null;
+  inventory_count: number | null;
+  supplier_name: string | null;
+  variants_count: number;
+}
+
+export async function scanProductUrl(url: string): Promise<ScannedProduct> {
+  const res = await fetch(`${API_URL}/products/scan-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to scan product URL");
+  }
+
+  const data = await res.json();
+  return {
+    ...data,
+    cost: Number(data.cost),
+    suggested_price: Number(data.suggested_price),
+  };
+}
+
 // Admin API - Scored Products
 
 export interface ScoredProduct {

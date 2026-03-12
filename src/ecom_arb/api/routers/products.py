@@ -1,5 +1,6 @@
 """Product API endpoints."""
 
+import logging
 from decimal import Decimal
 from uuid import UUID
 
@@ -10,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ecom_arb.db import Product, get_db
 from ecom_arb.db.models import SupplierSource
+from ecom_arb.services.product_scanner import ScanError, scan_product_url
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -54,6 +58,64 @@ class ProductListResponse(BaseModel):
 
     items: list[ProductResponse]
     total: int
+
+
+class ScanUrlRequest(BaseModel):
+    """Request to scan a supplier URL for product details."""
+
+    url: str
+
+
+class ScannedProductResponse(BaseModel):
+    """Response with extracted product details from a supplier URL."""
+
+    # Source
+    supplier_source: str
+    supplier_url: str
+    supplier_sku: str
+
+    # Product info
+    name: str
+    description: str
+    images: list[str]
+
+    # Pricing
+    cost: Decimal
+    suggested_price: Decimal
+
+    # Shipping
+    shipping_days_min: int
+    shipping_days_max: int
+
+    # Metadata
+    categories: list[str]
+    weight_grams: int | None
+    warehouse_country: str | None
+    inventory_count: int | None
+    supplier_name: str | None
+    variants_count: int
+
+
+@router.post("/scan-url", response_model=ScannedProductResponse)
+async def scan_url(request: ScanUrlRequest) -> ScannedProductResponse:
+    """Scan a supplier URL and extract product details.
+
+    Takes a supplier product URL (e.g. CJ Dropshipping), fetches the page,
+    parses product data, and returns structured data for pre-filling the
+    product creation form.
+    """
+    try:
+        result = await scan_product_url(request.url)
+    except ScanError as e:
+        logger.warning(f"Scan failed for {request.url}: {e.message}")
+        status_code = status.HTTP_400_BAD_REQUEST
+        if e.error_type == "timeout":
+            status_code = status.HTTP_504_GATEWAY_TIMEOUT
+        elif e.error_type == "unsupported_supplier":
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+        raise HTTPException(status_code=status_code, detail=e.message)
+
+    return ScannedProductResponse(**result.to_dict())
 
 
 @router.get("", response_model=ProductListResponse)
