@@ -8,7 +8,7 @@ NGROK_PORT ?= 4040
 dev:
 	@echo "=== Starting services via portless ==="
 	@echo "=== Starting API (background for ngrok setup) ==="
-	@portless api.ecomm uvicorn src.ecom_arb.api.app:app --reload --host 0.0.0.0 > /tmp/api.log 2>&1 &
+	@portless api.ecomm sh -c 'uvicorn src.ecom_arb.api.app:app --reload --host 0.0.0.0 --port $$PORT' > /tmp/api.log 2>&1 &
 	@sleep 2
 	@echo "API: https://api.ecomm.localhost:1355"
 	@echo "=== Starting ngrok ==="

@@ -14,7 +14,7 @@ sleep 1
 
 echo "=== Starting API server via portless ==="
 source .venv/bin/activate 2>/dev/null || true
-portless api.ecomm uvicorn src.ecom_arb.api.app:app --reload --host 0.0.0.0 > /tmp/api.log 2>&1 &
+portless api.ecomm sh -c 'uvicorn src.ecom_arb.api.app:app --reload --host 0.0.0.0 --port $PORT' > /tmp/api.log 2>&1 &
 API_PID=$!
 echo "API server started (PID: $API_PID)"
 
