@@ -10,9 +10,9 @@ dev:
 	@echo "=== Starting API (background for ngrok setup) ==="
 	@portless api.ecomm uvicorn src.ecom_arb.api.app:app --reload --host 0.0.0.0 > /tmp/api.log 2>&1 &
 	@sleep 2
-	@echo "API: https://api.ecomm.localhost"
+	@echo "API: https://api.ecomm.localhost:1355"
 	@echo "=== Starting ngrok ==="
-	@ngrok http https://api.ecomm.localhost --log=stdout > /tmp/ngrok.log 2>&1 &
+	@ngrok http https://api.ecomm.localhost:1355 --log=stdout > /tmp/ngrok.log 2>&1 &
 	@echo "Waiting for ngrok..."
 	@sleep 3
 	@echo "=== Getting ngrok URL and updating .env ==="
@@ -26,11 +26,11 @@ dev:
 		echo "WEBHOOK_BASE_URL set to: $$NGROK_URL"
 	@echo "=== Starting frontend ==="
 	@cd frontend && portless ecomm npm run dev > /tmp/frontend.log 2>&1 &
-	@echo "Frontend: https://ecomm.localhost"
+	@echo "Frontend: https://ecomm.localhost:1355"
 	@echo ""
 	@echo "=== All services running ==="
-	@echo "  API:      https://api.ecomm.localhost"
-	@echo "  Frontend: https://ecomm.localhost"
+	@echo "  API:      https://api.ecomm.localhost:1355"
+	@echo "  Frontend: https://ecomm.localhost:1355"
 	@echo "  Logs:     make dev-logs"
 	@echo ""
 	@echo "Press Ctrl+C or 'make dev-down' to stop"

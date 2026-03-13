@@ -21,14 +21,14 @@ echo "API server started (PID: $API_PID)"
 # Wait for API to be ready
 echo "Waiting for API..."
 for i in {1..30}; do
-    if curl -sk https://api.ecomm.localhost/health > /dev/null 2>&1; then
+    if curl -sk https://api.ecomm.localhost:1355/health > /dev/null 2>&1; then
         break
     fi
     sleep 0.5
 done
 
 echo "=== Starting ngrok ==="
-ngrok http https://api.ecomm.localhost --log=stdout > /tmp/ngrok.log 2>&1 &
+ngrok http https://api.ecomm.localhost:1355 --log=stdout > /tmp/ngrok.log 2>&1 &
 NGROK_PID=$!
 echo "ngrok started (PID: $NGROK_PID)"
 
@@ -68,8 +68,8 @@ cd ..
 
 echo ""
 echo "=== All services started ==="
-echo "  API:      https://api.ecomm.localhost"
-echo "  Frontend: https://ecomm.localhost"
+echo "  API:      https://api.ecomm.localhost:1355"
+echo "  Frontend: https://ecomm.localhost:1355"
 echo "  ngrok:    $NGROK_URL"
 echo "  ngrok UI: http://localhost:4040"
 echo ""
