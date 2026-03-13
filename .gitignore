@@ -84,3 +84,9 @@ storage.sqlite3*
 # SQLite WAL files
 *.db-shm
 *.db-wal
+
+# Gas Town runtime
+.runtime/
+.beads/redirect
+.claude/commands/handoff.md
+.claude/commands/review.md
