@@ -2,7 +2,14 @@
  * API client for backend communication.
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:6025/api";
+// Browser: NEXT_PUBLIC_API_URL (portless HTTPS, needed for CORS)
+// Server:  INTERNAL_API_URL (direct localhost HTTP, avoids .localhost DNS issues in Node)
+const API_URL =
+  typeof window === "undefined"
+    ? process.env.INTERNAL_API_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      "http://localhost:6025/api"
+    : process.env.NEXT_PUBLIC_API_URL || "http://localhost:6025/api";
 
 export interface Product {
   id: string;

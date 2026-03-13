@@ -25,7 +25,8 @@ dev:
 		echo "ngrok: $$NGROK_URL" && \
 		echo "WEBHOOK_BASE_URL set to: $$NGROK_URL"
 	@echo "=== Starting frontend ==="
-	@cd frontend && portless ecomm npm run dev > /tmp/frontend.log 2>&1 &
+	@API_PORT=$$(grep 'Using port' /tmp/api.log | awk '{print $$NF}') && \
+		cd frontend && INTERNAL_API_URL=http://127.0.0.1:$$API_PORT/api portless ecomm npm run dev > /tmp/frontend.log 2>&1 &
 	@echo "Frontend: https://ecomm.localhost:1355"
 	@echo ""
 	@echo "=== All services running ==="

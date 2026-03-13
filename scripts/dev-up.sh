@@ -60,8 +60,10 @@ fi
 echo "Set WEBHOOK_BASE_URL=$NGROK_URL"
 
 echo "=== Starting frontend via portless ==="
+API_PORT=$(grep 'Using port' /tmp/api.log | awk '{print $NF}')
+echo "API ephemeral port: $API_PORT"
 cd frontend
-portless ecomm npm run dev > /tmp/frontend.log 2>&1 &
+INTERNAL_API_URL="http://127.0.0.1:$API_PORT/api" portless ecomm npm run dev > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
 echo "Frontend started (PID: $FRONTEND_PID)"
 cd ..
